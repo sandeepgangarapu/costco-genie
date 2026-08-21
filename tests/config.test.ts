@@ -39,6 +39,9 @@ describe('loadConfig', () => {
       emailRecipient: null,
       minimumSavingsCents: 1,
       priceBatchSize: 25,
+      sameDayMarkupPercent: 13.5,
+      sameDayPostalCode: '98029',
+      sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
       scheduledHour: 9,
       scheduledMinute: 0,
     });
@@ -64,6 +67,9 @@ describe('loadConfig', () => {
       daysToFetch: 35,
       emailRecipient: 'me@example.com',
       priceBatchSize: 25,
+      sameDayMarkupPercent: 13.5,
+      sameDayPostalCode: '98029',
+      sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
     });
   });
 
@@ -126,6 +132,11 @@ describe('loadConfig', () => {
     { scheduledMinute: 60 },
     { priceBatchSize: 26 },
     { minimumSavingsCents: -1 },
+    { sameDayMarkupPercent: 0 },
+    { sameDayMarkupPercent: 100 },
+    { sameDayPostalCode: '9802' },
+    { sameDayPostalCode: '9802A' },
+    { sameDayRepresentativeAddress: '' },
   ])('rejects invalid configuration ranges: %j', (invalidConfig) => {
     const paths = appPaths(createTemporaryHome());
     mkdirSync(paths.dataDir, { recursive: true });

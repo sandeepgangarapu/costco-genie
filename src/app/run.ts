@@ -10,6 +10,7 @@ import type {
   WarehousePriceRequest,
   ReportPriceEvidenceResult,
 } from '../costco/price-client.js';
+import { inverseMarkupCents } from '../costco/same-day-client.js';
 import { adaptCostcoReceipts } from '../costco/receipt-client.js';
 import type {
   NotificationChannelResult,
@@ -270,6 +271,10 @@ async function executeBegunRun(
         createTimeoutSignal:
           dependencies.createTimeoutSignal ?? defaultTimeoutSignal,
         now: () => started,
+        sameDayMarkupPercent: dependencies.config.sameDayMarkupPercent,
+        sameDayPostalCode: dependencies.config.sameDayPostalCode,
+        sameDayRepresentativeAddress:
+          dependencies.config.sameDayRepresentativeAddress,
         timeoutMilliseconds: EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS,
       };
       if (dependencies.fetchReportPriceEvidence) {
@@ -320,15 +325,24 @@ async function executeBegunRun(
       started,
       dependencies.config,
     );
+    const reportRows = fullReportRows(
+      recentPurchases,
+      observations,
+      priceEvidence,
+      started,
+      dependencies.config,
+    );
+    const estimatedOpportunities = estimatedCandidates(reportRows);
+    const alertCandidates = [...candidates, ...estimatedOpportunities];
     const localSelections = selectionsForChannel(
       dependencies.database,
       'local',
-      candidates,
+      alertCandidates,
     );
     const emailSelections = selectionsForChannel(
       dependencies.database,
       'email',
-      candidates,
+      alertCandidates,
     );
     const deliveredPurchaseIds = new Set<string>();
     const local = await deliverLocal(
@@ -375,6 +389,9 @@ async function executeBegunRun(
     const summary: RunSummary = {
       alertsSent: deliveredPurchaseIds.size,
       candidatesFound: candidates.length,
+      ...(estimatedOpportunities.length === 0
+        ? {}
+        : { estimatedOpportunitiesFound: estimatedOpportunities.length }),
       finishedAt: now().toISOString(),
       notifications,
       observationsRecorded: observations.length,
@@ -386,13 +403,6 @@ async function executeBegunRun(
         ? {}
         : { diagnostic: diagnostics.join(' ') }),
     };
-    const reportRows = fullReportRows(
-      recentPurchases,
-      observations,
-      priceEvidence,
-      started,
-      dependencies.config,
-    );
     return finish(summary, reportRows, priceEvidence.diagnostics, () => {
       if (local.error === null) {
         persistSelections(dependencies.database, 'local', localSelections);
@@ -473,14 +483,88 @@ function fullReportRows(
         currentEvidence?.sameDay ??
         unavailableReportPrice('same_day', 'source_not_configured'),
     };
+    const sameDayWarehouseEstimateCents = usableReportPrice(prices.sameDay)
+      ? inverseMarkupCents(
+          prices.sameDay.unitPriceCents,
+          config.sameDayMarkupPercent,
+        )
+      : null;
+    const sameDayEstimatedDeltaCents =
+      sameDayWarehouseEstimateCents === null
+        ? null
+        : row.purchase.paidUnitCents - sameDayWarehouseEstimateCents;
+    const estimatedOpportunity =
+      row.status !== 'candidate' &&
+      !usableReportPrice(prices.warehouse) &&
+      row.daysRemaining !== null &&
+      ![
+        'invalid_config',
+        'invalid_purchase_timestamp',
+        'invalid_purchase_price',
+        'outside_adjustment_window',
+      ].includes(row.reason ?? '') &&
+      sameDayEstimatedDeltaCents !== null &&
+      sameDayEstimatedDeltaCents > 0 &&
+      sameDayEstimatedDeltaCents * row.purchase.quantity >=
+        config.minimumSavingsCents;
     return {
       purchase: row.purchase,
       prices,
+      sameDayWarehouseEstimateCents,
+      sameDayMarkupPercent: config.sameDayMarkupPercent,
+      sameDayEstimatedDeltaCents,
       warehouseDeltaCents: row.warehouseDeltaCents,
       daysRemaining: row.daysRemaining,
-      status: row.status,
-      reason: row.reason,
+      status: estimatedOpportunity ? 'estimated_opportunity' : row.status,
+      reason: estimatedOpportunity
+        ? 'same_day_estimate_lower_manual_verification_required'
+        : row.reason,
     };
+  });
+}
+
+function usableReportPrice(
+  price: ReportPriceObservation,
+): price is ReportPriceObservation & { readonly unitPriceCents: number } {
+  return (
+    price.unitPriceCents !== null &&
+    price.unitPriceCents > 0 &&
+    price.unavailableReason === null
+  );
+}
+
+function estimatedCandidates(
+  rows: FullRunReport['rows'],
+): import('../domain/types.js').AdjustmentCandidate[] {
+  return rows.flatMap((row) => {
+    if (
+      row.status !== 'estimated_opportunity' ||
+      row.sameDayWarehouseEstimateCents === null ||
+      row.sameDayEstimatedDeltaCents === null ||
+      row.daysRemaining === null
+    ) {
+      return [];
+    }
+    return [
+      {
+        currentUnitCents: row.sameDayWarehouseEstimateCents,
+        daysRemaining: row.daysRemaining,
+        estimated: true,
+        observation: {
+          itemNumber: row.purchase.itemNumber,
+          warehouseNumber: row.purchase.warehouseNumber,
+          observedAt: row.prices.sameDay.observedAt ?? row.purchase.purchasedAt,
+          source: row.prices.sameDay.source ?? 'costco_same_day_estimate',
+          unitPriceCents: row.sameDayWarehouseEstimateCents,
+          unresolvedReason: null,
+        },
+        purchase: {
+          ...row.purchase,
+          id: `${row.purchase.id}:same_day_estimate`,
+        },
+        savingsCents: row.sameDayEstimatedDeltaCents * row.purchase.quantity,
+      },
+    ];
   });
 }
 

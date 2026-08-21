@@ -674,6 +674,91 @@ describe('runPriceCheck', () => {
     deps.database.close();
   });
 
+  it('alerts separately on a ZIP-localized Same-Day estimate when verified warehouse pricing is unavailable', async () => {
+    const reports: FullRunReport[] = [];
+    const unavailable = (
+      channel: 'warehouse' | 'warehouse_savings' | 'costco_com',
+    ) =>
+      ({
+        channel,
+        observedAt: NOW.toISOString(),
+        promotionText: null,
+        source: channel === 'warehouse' ? 'warehouse-price-api' : null,
+        unavailableReason: 'not_available',
+        unitPriceCents: null,
+      }) as const;
+    const deps = dependencies({
+      fetchEvidence: async (_requests, options) => {
+        expect(options.sameDayMarkupPercent).toBe(13.5);
+        expect(options.sameDayPostalCode).toBe('98029');
+        expect(options.sameDayRepresentativeAddress).toBe(
+          '2520 NE Park Dr, Issaquah, WA 98029',
+        );
+        return {
+          diagnostics: [],
+          items: [
+            {
+              itemNumber: '100978861',
+              warehouseNumber: '129',
+              prices: {
+                warehouse: unavailable('warehouse'),
+                warehouseSavings: unavailable('warehouse_savings'),
+                costcoCom: unavailable('costco_com'),
+                sameDay: {
+                  channel: 'same_day',
+                  observedAt: NOW.toISOString(),
+                  promotionText: null,
+                  source: 'costco_same_day_zip_98029',
+                  unavailableReason: null,
+                  unitPriceCents: 900,
+                },
+              },
+            },
+          ],
+        };
+      },
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/full.html',
+          csvFile: '/reports/full.csv',
+          jsonFile: '/reports/full.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary).toMatchObject({
+      candidatesFound: 0,
+      estimatedOpportunitiesFound: 1,
+      alertsSent: 1,
+    });
+    expect(deps.localNotifier.messages[0]?.body).toMatch(/estimated/i);
+    expect(deps.localNotifier.messages[0]?.body).toMatch(/verify/i);
+    expect(deps.mailNotifier.messages[0]?.text).toMatch(/estimated/i);
+    expect(reports[0]?.rows[0]).toMatchObject({
+      sameDayWarehouseEstimateCents: 793,
+      sameDayMarkupPercent: 13.5,
+      sameDayEstimatedDeltaCents: 106,
+      warehouseDeltaCents: null,
+      status: 'estimated_opportunity',
+      reason: 'same_day_estimate_lower_manual_verification_required',
+    });
+    const storedPurchase = deps.database.recentPurchases('2026-01-01')[0];
+    expect(storedPurchase).toBeDefined();
+    expect(
+      deps.database.getChannelAlertState(
+        'local',
+        `${storedPurchase?.id ?? ''}:same_day_estimate`,
+      ),
+    ).toMatchObject({ lastNotifiedPriceCents: 793 });
+    expect(
+      deps.database.getChannelAlertState('local', storedPurchase?.id ?? ''),
+    ).toBeNull();
+    deps.database.close();
+  });
+
   it('adapts live receipts, checks their same-warehouse price, delivers both reports, and persists both channel states', async () => {
     let receivedRequests: unknown;
     let receivedBatchSize: unknown;

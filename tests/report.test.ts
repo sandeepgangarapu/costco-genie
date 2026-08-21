@@ -36,6 +36,9 @@ describe('report rendering', () => {
   it('renders a compact potential-adjustment text report with original warehouse, prices, savings, and days remaining', () => {
     const report = renderTextReport({ candidates: [candidate] });
 
+    expect(report).toMatch(
+      /^Potential Costco price adjustments\nItem 100001<script> \| <img src=x onerror=alert\(1\)> \| Purchased 2026-08-15\n/,
+    );
     expect(report).toContain('Potential Costco price adjustments');
     expect(report).toContain(
       'Verify this potential adjustment at the original warehouse.',
@@ -50,6 +53,9 @@ describe('report rendering', () => {
   it('escapes every vendor and user supplied string in the HTML report', () => {
     const report = renderHtmlReport({ candidates: [candidate] });
 
+    expect(report).toContain(
+      '<p><strong>Item 100001&lt;script&gt;</strong> | &lt;img src=x onerror=alert(1)&gt; | Purchased 2026-08-15</p>',
+    );
     expect(report).toContain('&lt;img src=x onerror=alert(1)&gt;');
     expect(report).toContain('100001&lt;script&gt;');
     expect(report).toContain('123&amp;main');

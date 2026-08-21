@@ -45,6 +45,7 @@ interface ObservationRow {
 interface RunRow {
   alerts_sent: number;
   candidates_found: number;
+  estimated_opportunities_found: number;
   diagnostic: string | null;
   finished_at: string;
   observations_recorded: number;
@@ -65,6 +66,7 @@ interface AlertStateRow {
 export class Database {
   private readonly runDiagnosticSelection: string;
   private readonly runReportFilesSelection: string;
+  private readonly runEstimatedOpportunitiesSelection: string;
 
   private constructor(
     private readonly sqlite: ReturnType<typeof Sqlite>,
@@ -78,6 +80,12 @@ export class Database {
       this.runReportFilesSelection = this.hasColumn('runs', 'report_files')
         ? 'report_files'
         : 'NULL AS report_files';
+      this.runEstimatedOpportunitiesSelection = this.hasColumn(
+        'runs',
+        'estimated_opportunities_found',
+      )
+        ? 'estimated_opportunities_found'
+        : '0 AS estimated_opportunities_found';
       return;
     }
     this.sqlite.exec(`
@@ -130,6 +138,7 @@ export class Database {
         purchases_processed INTEGER,
         observations_recorded INTEGER,
         candidates_found INTEGER,
+        estimated_opportunities_found INTEGER NOT NULL DEFAULT 0,
         alerts_sent INTEGER,
         unresolved_prices INTEGER,
         notification_results TEXT,
@@ -144,8 +153,14 @@ export class Database {
     this.ensureColumn('runs', 'notification_results', 'TEXT');
     this.ensureColumn('runs', 'report_files', 'TEXT');
     this.ensureColumn('runs', 'diagnostic', 'TEXT');
+    this.ensureColumn(
+      'runs',
+      'estimated_opportunities_found',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
     this.runDiagnosticSelection = 'diagnostic';
     this.runReportFilesSelection = 'report_files';
+    this.runEstimatedOpportunitiesSelection = 'estimated_opportunities_found';
     this.sqlite.exec(`
       INSERT OR IGNORE INTO alert_delivery_state (
         channel, purchase_id, last_notified_price_cents, urgency_bucket
@@ -309,6 +324,7 @@ export class Database {
           number,
           number,
           number,
+          number,
           string | null,
           string | null,
           string | null,
@@ -318,7 +334,8 @@ export class Database {
         `
         UPDATE runs
         SET finished_at = ?, outcome = ?, purchases_processed = ?,
-            observations_recorded = ?, candidates_found = ?, alerts_sent = ?,
+            observations_recorded = ?, candidates_found = ?,
+            estimated_opportunities_found = ?, alerts_sent = ?,
             unresolved_prices = ?, notification_results = ?, diagnostic = ?,
             report_files = ?
         WHERE id = ?
@@ -330,6 +347,7 @@ export class Database {
         summary.purchasesProcessed,
         summary.observationsRecorded,
         summary.candidatesFound,
+        summary.estimatedOpportunitiesFound ?? 0,
         summary.alertsSent,
         summary.unresolvedPrices,
         summary.notifications === undefined
@@ -348,7 +366,8 @@ export class Database {
       .prepare<[], RunRow>(
         `
         SELECT started_at, finished_at, outcome, purchases_processed,
-               observations_recorded, candidates_found, alerts_sent,
+               observations_recorded, candidates_found,
+               ${this.runEstimatedOpportunitiesSelection}, alerts_sent,
                unresolved_prices, notification_results,
                ${this.runDiagnosticSelection},
                ${this.runReportFilesSelection}
@@ -368,7 +387,8 @@ export class Database {
       .prepare<[], RunRow>(
         `
         SELECT started_at, finished_at, outcome, purchases_processed,
-               observations_recorded, candidates_found, alerts_sent,
+               observations_recorded, candidates_found,
+               ${this.runEstimatedOpportunitiesSelection}, alerts_sent,
                unresolved_prices, notification_results,
                ${this.runDiagnosticSelection},
                ${this.runReportFilesSelection}
@@ -481,6 +501,11 @@ function toRunSummary(row: RunRow): RunSummary {
   return {
     alertsSent: row.alerts_sent,
     candidatesFound: row.candidates_found,
+    ...(row.estimated_opportunities_found === 0
+      ? {}
+      : {
+          estimatedOpportunitiesFound: row.estimated_opportunities_found,
+        }),
     finishedAt: row.finished_at,
     observationsRecorded: row.observations_recorded,
     outcome: row.outcome,

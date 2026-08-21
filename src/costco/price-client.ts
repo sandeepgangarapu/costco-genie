@@ -6,6 +6,11 @@ import type {
   ReportSourceDiagnostic,
 } from '../domain/types.js';
 import { parseMoneyToCents } from '../lib/money.js';
+import {
+  fetchSameDayPrices,
+  type SameDayPriceOptions,
+  type SameDayPriceObservation,
+} from './same-day-client.js';
 
 const PRODUCT_ENDPOINT =
   'https://ecom-api.costco.com/ebusiness/product/v1/products/graphql';
@@ -13,6 +18,7 @@ const PRODUCT_CLIENT_ID = '4900eb1f-0c10-4bd9-99c3-c59e6c1ecebf';
 const MAX_BATCH_SIZE = 25;
 // Each unofficial HTTP batch is bounded so the parent-held run lock releases.
 const EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
+const SAME_DAY_REQUEST_TIMEOUT_MILLISECONDS = 180_000;
 const SOURCE = 'warehouse-price-api';
 const CATALOG_SOURCE = 'costco_product_api';
 const SAVINGS_SOURCE = 'warehouse_savings_page';
@@ -46,6 +52,13 @@ export interface WarehousePriceOptions {
   readonly fetchFn?: typeof fetch;
   readonly now?: () => Date;
   readonly timeoutMilliseconds?: number;
+  readonly sameDayMarkupPercent?: number;
+  readonly sameDayPostalCode?: string;
+  readonly sameDayRepresentativeAddress?: string;
+  readonly sameDayPriceFetcher?: (
+    requests: readonly WarehousePriceRequest[],
+    options: SameDayPriceOptions,
+  ) => Promise<SameDayPriceObservation[]>;
 }
 
 export interface ReportPriceEvidenceItem {
@@ -301,6 +314,7 @@ export async function fetchReportPriceEvidence(
       ((milliseconds) => AbortSignal.timeout(milliseconds))
     )(options.timeoutMilliseconds ?? EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS),
   );
+  const sameDay = await fetchSameDayEvidence(requests, options, observed);
   const warehouseByKey = new Map(
     warehouseObservations.map((value) => [priceKey(value), value]),
   );
@@ -309,6 +323,9 @@ export async function fetchReportPriceEvidence(
   );
   const savingsByKey = new Map(
     savings.items.map((value) => [priceKey(value), value]),
+  );
+  const sameDayByKey = new Map(
+    sameDay.items.map((value) => [priceKey(value), value]),
   );
   const items = requests.map((request) => {
     const key = priceKey(request);
@@ -338,7 +355,9 @@ export async function fetchReportPriceEvidence(
         costcoCom: onlineRecord
           ? reportPriceOnly(onlineRecord)
           : unavailable('costco_com', 'product_not_found'),
-        sameDay: unavailable('same_day', 'source_not_configured'),
+        sameDay: sameDayByKey.get(key)
+          ? reportPriceOnly(sameDayByKey.get(key)!)
+          : unavailable('same_day', 'source_not_configured'),
       },
     };
   });
@@ -359,14 +378,79 @@ export async function fetchReportPriceEvidence(
       ),
       online.diagnostic,
       savings.diagnostic,
-      diagnostic(
+      sameDay.diagnostic,
+    ],
+  };
+}
+
+async function fetchSameDayEvidence(
+  requests: readonly WarehousePriceRequest[],
+  options: WarehousePriceOptions,
+  observed: Date,
+): Promise<{
+  items: SameDayPriceObservation[];
+  diagnostic: ReportSourceDiagnostic;
+}> {
+  const observedAt = observed.toISOString();
+  const postalCode = options.sameDayPostalCode;
+  if (postalCode === undefined || options.sameDayMarkupPercent === undefined) {
+    return {
+      items: [],
+      diagnostic: diagnostic(
         'same_day',
         'same_day',
         'unavailable',
         observedAt,
         'Same-Day source is not configured.',
       ),
-    ],
+    };
+  }
+
+  const sameDayPriceFetcher = options.sameDayPriceFetcher ?? fetchSameDayPrices;
+  let items: SameDayPriceObservation[];
+  try {
+    items = await sameDayPriceFetcher(requests, {
+      now: () => observed,
+      postalCode,
+      deliveryAddress: options.sameDayRepresentativeAddress,
+      timeout: SAME_DAY_REQUEST_TIMEOUT_MILLISECONDS,
+    });
+  } catch {
+    const source = `same_day_guest_storefront_zip_${postalCode}`;
+    return {
+      items: requests.map((request) => ({
+        ...request,
+        ...unavailable('same_day', 'source_failed'),
+      })),
+      diagnostic: diagnostic(
+        'same_day',
+        source,
+        'error',
+        observedAt,
+        `Same-Day guest storefront lookup for ZIP ${postalCode} failed.`,
+      ),
+    };
+  }
+  const failed = items.some((item) =>
+    [
+      'browser_launch_failed',
+      'deadline_exceeded',
+      'postal_code_not_confirmed',
+      'search_failed',
+    ].includes(item.unavailableReason ?? ''),
+  );
+  const source = `same_day_guest_storefront_zip_${postalCode}`;
+  return {
+    items,
+    diagnostic: diagnostic(
+      'same_day',
+      source,
+      failed ? 'error' : 'ok',
+      observedAt,
+      failed
+        ? `Same-Day guest storefront lookup for ZIP ${postalCode} completed with one or more failures.`
+        : `Same-Day guest storefront lookup for ZIP ${postalCode} completed.`,
+    ),
   };
 }
 

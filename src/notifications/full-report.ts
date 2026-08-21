@@ -59,6 +59,9 @@ const CSV_COLUMNS = [
   'same_day_source',
   'same_day_observed_at',
   'same_day_unavailable_reason',
+  'same_day_estimated_warehouse_price',
+  'same_day_markup_percent',
+  'same_day_estimated_delta',
   'warehouse_delta',
   'days_remaining',
   'status',
@@ -208,6 +211,13 @@ function renderFullReportCsv(report: FullRunReport): string {
       same_day_source: sameDay.source ?? 'Unavailable',
       same_day_observed_at: sameDay.observedAt ?? 'Unavailable',
       same_day_unavailable_reason: sameDay.unavailableReason ?? '',
+      same_day_estimated_warehouse_price: formatOptionalCents(
+        row.sameDayWarehouseEstimateCents,
+      ),
+      same_day_markup_percent: `${String(row.sameDayMarkupPercent)}%`,
+      same_day_estimated_delta: formatOptionalCents(
+        row.sameDayEstimatedDeltaCents,
+      ),
       warehouse_delta: formatOptionalCents(row.warehouseDeltaCents),
       days_remaining:
         row.daysRemaining === null ? 'Unavailable' : String(row.daysRemaining),
@@ -282,6 +292,7 @@ function renderFullReportHtml(report: FullRunReport): string {
     th, td { border-bottom: 1px solid #e4e8ef; padding: .65rem; text-align: left; vertical-align: top; }
     th { background: #f0f3f8; white-space: nowrap; }
     .candidate { color: #087443; font-weight: 700; }
+    .estimated { color: #8a5a00; font-weight: 700; }
     .muted { color: #5c667a; }
   </style>
 </head>
@@ -303,7 +314,7 @@ function renderFullReportHtml(report: FullRunReport): string {
     <table>
       <caption>Purchase-line price comparison</caption>
       <thead><tr>
-        <th scope="col">Item</th><th scope="col">Name</th><th scope="col">Warehouse</th><th scope="col">Purchased</th><th scope="col">Qty</th><th scope="col">Gross unit</th><th scope="col">Receipt discount</th><th scope="col">Net paid unit</th><th scope="col">Current warehouse</th><th scope="col">Historical receipt evidence</th><th scope="col">Warehouse Savings</th><th scope="col">Costco.com</th><th scope="col">Same-Day</th><th scope="col">Warehouse delta</th><th scope="col">Days left</th><th scope="col">Status</th><th scope="col">Reason</th>
+        <th scope="col">Item</th><th scope="col">Name</th><th scope="col">Warehouse</th><th scope="col">Purchased</th><th scope="col">Qty</th><th scope="col">Gross unit</th><th scope="col">Receipt discount</th><th scope="col">Net paid unit</th><th scope="col">Current warehouse</th><th scope="col">Historical receipt evidence</th><th scope="col">Warehouse Savings</th><th scope="col">Costco.com</th><th scope="col">Same-Day</th><th scope="col">Same-Day corrected warehouse estimate</th><th scope="col">Estimated delta</th><th scope="col">Warehouse delta</th><th scope="col">Days left</th><th scope="col">Status</th><th scope="col">Reason</th>
       </tr></thead>
       <tbody>${bodyRows}</tbody>
     </table>
@@ -333,11 +344,20 @@ function renderHtmlRow(row: FullReportRow): string {
   <td>${renderHtmlPrice(row.prices.warehouseSavings)}</td>
   <td>${renderHtmlPrice(row.prices.costcoCom)}</td>
   <td>${renderHtmlPrice(row.prices.sameDay)}</td>
+  <td>${renderSameDayEstimate(row)}</td>
+  <td>${formatOptionalCents(row.sameDayEstimatedDeltaCents)}</td>
   <td>${formatOptionalCents(row.warehouseDeltaCents)}</td>
   <td>${row.daysRemaining === null ? 'Unavailable' : String(row.daysRemaining)}</td>
-  <td class="${row.status === 'candidate' ? 'candidate' : ''}">${escapeHtml(row.status)}</td>
-  <td>${escapeHtml(row.reason ?? '')}</td>
+  <td class="${row.status === 'candidate' ? 'candidate' : row.status === 'estimated_opportunity' ? 'estimated' : ''}">${escapeHtml(row.status)}</td>
+  <td>${row.status === 'estimated_opportunity' ? 'Manual warehouse verification required — ' : ''}${escapeHtml(row.reason ?? '')}</td>
 </tr>`;
+}
+
+function renderSameDayEstimate(row: FullReportRow): string {
+  if (row.sameDayWarehouseEstimateCents === null) {
+    return '<span class="muted">Unavailable</span>';
+  }
+  return `${formatCents(row.sameDayWarehouseEstimateCents)}<br><span class="muted">Same-Day corrected warehouse estimate (${String(row.sameDayMarkupPercent)}%); not a verified warehouse price</span>`;
 }
 
 function renderHtmlPrice(price: ReportPriceObservation): string {
@@ -512,6 +532,17 @@ function validateReport(report: FullRunReport): void {
     ) {
       throw new TypeError(
         'A candidate requires a verified current warehouse price and positive warehouse delta.',
+      );
+    }
+    if (
+      row.status === 'estimated_opportunity' &&
+      (row.prices.warehouse.unitPriceCents !== null ||
+        row.sameDayWarehouseEstimateCents === null ||
+        row.sameDayEstimatedDeltaCents === null ||
+        row.sameDayEstimatedDeltaCents <= 0)
+    ) {
+      throw new TypeError(
+        'An estimated opportunity requires no verified warehouse price and a positive Same-Day estimated delta.',
       );
     }
   }

@@ -47,9 +47,12 @@ export interface ReportPriceChannels {
 export interface FullReportRow {
   readonly purchase: Purchase;
   readonly prices: ReportPriceChannels;
+  readonly sameDayWarehouseEstimateCents: number | null;
+  readonly sameDayMarkupPercent: number;
+  readonly sameDayEstimatedDeltaCents: number | null;
   readonly warehouseDeltaCents: number | null;
   readonly daysRemaining: number | null;
-  readonly status: 'candidate' | 'not_eligible';
+  readonly status: 'candidate' | 'estimated_opportunity' | 'not_eligible';
   readonly reason: string | null;
 }
 
@@ -86,6 +89,7 @@ export interface AdjustmentCandidate {
   readonly currentUnitCents: number;
   readonly savingsCents: number;
   readonly daysRemaining: number;
+  readonly estimated?: boolean;
 }
 
 export interface RunSummary {
@@ -96,6 +100,7 @@ export interface RunSummary {
   readonly purchasesProcessed: number;
   readonly observationsRecorded: number;
   readonly candidatesFound: number;
+  readonly estimatedOpportunitiesFound?: number;
   readonly alertsSent: number;
   readonly unresolvedPrices: number;
   readonly notifications?: NotificationResults;

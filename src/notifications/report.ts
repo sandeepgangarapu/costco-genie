@@ -25,7 +25,12 @@ export function renderCompactReport(summary: AdjustmentReportSummary): string {
   );
   const count = summary.candidates.length;
   const hidden = Math.max(0, count - COMPACT_ITEM_LIMIT);
-  const footer = 'Verify at the original warehouse.';
+  const hasEstimates = summary.candidates.some(
+    (candidate) => candidate.estimated === true,
+  );
+  const footer = hasEstimates
+    ? 'Estimated from Same-Day pricing. Verify at the original warehouse.'
+    : 'Verify at the original warehouse.';
   const lines = [
     `${String(count)} potential ${count === 1 ? 'adjustment' : 'adjustments'} • ${formatCents(totalSavings)} total potential savings`,
     ...ordered.slice(0, COMPACT_ITEM_LIMIT).map((candidate) => {
@@ -33,7 +38,8 @@ export function renderCompactReport(summary: AdjustmentReportSummary): string {
         escapeText(candidateDescription(candidate)),
         COMPACT_DESCRIPTION_LENGTH,
       );
-      return `• ${description} (item ${escapeText(candidate.purchase.itemNumber)}, WH ${escapeText(candidate.purchase.warehouseNumber)}): ${formatCents(candidate.savingsCents)} • ${String(candidate.daysRemaining)}d left`;
+      const label = candidate.estimated === true ? 'Estimated: ' : '';
+      return `• ${label}${description} (item ${escapeText(candidate.purchase.itemNumber)}, WH ${escapeText(candidate.purchase.warehouseNumber)}): ${formatCents(candidate.savingsCents)} • ${String(candidate.daysRemaining)}d left`;
     }),
     ...(hidden === 0 ? [] : [`+${String(hidden)} more`]),
   ];
@@ -58,6 +64,7 @@ export function renderTextReport(summary: AdjustmentReportSummary): string {
 
   return [
     'Potential Costco price adjustments',
+    ...summary.candidates.map((candidate) => candidateSummaryLine(candidate)),
     'Verify this potential adjustment at the original warehouse.',
     '',
     ...summary.candidates.flatMap((candidate) => [
@@ -65,6 +72,11 @@ export function renderTextReport(summary: AdjustmentReportSummary): string {
       `Warehouse: ${escapeText(candidate.purchase.warehouseNumber)}`,
       `Paid: ${formatCents(candidate.purchase.paidUnitCents)}`,
       `Current: ${formatCents(candidate.currentUnitCents)}`,
+      ...(candidate.estimated === true
+        ? [
+            'Price basis: Estimated warehouse price from Same-Day; manual verification required',
+          ]
+        : []),
       `Potential savings: ${formatCents(candidate.savingsCents)}`,
       `${candidate.daysRemaining} ${pluralizeDay(candidate.daysRemaining)} remaining`,
       '',
@@ -75,6 +87,12 @@ export function renderTextReport(summary: AdjustmentReportSummary): string {
 }
 
 export function renderHtmlReport(summary: AdjustmentReportSummary): string {
+  const itemSummary = summary.candidates
+    .map(
+      (candidate) =>
+        `<p><strong>Item ${escapeHtml(candidate.purchase.itemNumber)}</strong> | ${escapeHtml(candidateDescription(candidate))} | Purchased ${escapeHtml(purchaseDate(candidate))}</p>`,
+    )
+    .join('\n    ');
   const items = summary.candidates
     .map(
       (candidate) => `
@@ -84,6 +102,7 @@ export function renderHtmlReport(summary: AdjustmentReportSummary): string {
           Original warehouse: ${escapeHtml(candidate.purchase.warehouseNumber)}<br>
           Paid: ${formatCents(candidate.purchase.paidUnitCents)}<br>
           Current: ${formatCents(candidate.currentUnitCents)}<br>
+          ${candidate.estimated === true ? 'Price basis: Estimated warehouse price from Same-Day; manual verification required<br>' : ''}
           Potential savings: ${formatCents(candidate.savingsCents)}<br>
           ${candidate.daysRemaining} ${pluralizeDay(candidate.daysRemaining)} remaining</p>
         </li>`,
@@ -99,6 +118,7 @@ export function renderHtmlReport(summary: AdjustmentReportSummary): string {
 <html lang="en">
   <body>
     <h1>Potential Costco price adjustments</h1>
+    ${itemSummary}
     <p>These are potential price adjustments. Verify each one at the original warehouse before requesting an adjustment.</p>
     ${body}
   </body>
@@ -107,6 +127,14 @@ export function renderHtmlReport(summary: AdjustmentReportSummary): string {
 
 function candidateHeading(candidate: AdjustmentCandidate): string {
   return `${escapeText(candidateDescription(candidate))} (item ${escapeText(candidate.purchase.itemNumber)})`;
+}
+
+function candidateSummaryLine(candidate: AdjustmentCandidate): string {
+  return `Item ${escapeText(candidate.purchase.itemNumber)} | ${escapeText(candidateDescription(candidate))} | Purchased ${escapeText(purchaseDate(candidate))}`;
+}
+
+function purchaseDate(candidate: AdjustmentCandidate): string {
+  return candidate.purchase.purchasedAt.slice(0, 10);
 }
 
 function candidateDescription(candidate: AdjustmentCandidate): string {

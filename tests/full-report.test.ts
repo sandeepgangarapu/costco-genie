@@ -51,7 +51,7 @@ describe('writeFullReport', () => {
 
     const csv = readFileSync(files.csvFile, 'utf8');
     expect(csv).toContain(
-      'record_type,item_number,item_name,warehouse_number,purchased_at,quantity,gross_unit_price,receipt_discount_total,net_paid_unit_price,current_warehouse_price,warehouse_source,warehouse_observed_at,warehouse_unavailable_reason,historical_receipt_price,historical_receipt_source,historical_receipt_observed_at,historical_receipt_unavailable_reason,warehouse_savings_price,warehouse_savings_promotion,warehouse_savings_source,warehouse_savings_observed_at,warehouse_savings_unavailable_reason,costco_com_price,costco_com_source,costco_com_observed_at,costco_com_unavailable_reason,same_day_price,same_day_source,same_day_observed_at,same_day_unavailable_reason,warehouse_delta,days_remaining,status,reason,run_started_at,run_finished_at,run_outcome,run_diagnostic,source_diagnostic_channel,source_diagnostic_source,source_diagnostic_status,source_diagnostic_observed_at,source_diagnostic_message',
+      'record_type,item_number,item_name,warehouse_number,purchased_at,quantity,gross_unit_price,receipt_discount_total,net_paid_unit_price,current_warehouse_price,warehouse_source,warehouse_observed_at,warehouse_unavailable_reason,historical_receipt_price,historical_receipt_source,historical_receipt_observed_at,historical_receipt_unavailable_reason,warehouse_savings_price,warehouse_savings_promotion,warehouse_savings_source,warehouse_savings_observed_at,warehouse_savings_unavailable_reason,costco_com_price,costco_com_source,costco_com_observed_at,costco_com_unavailable_reason,same_day_price,same_day_source,same_day_observed_at,same_day_unavailable_reason,same_day_estimated_warehouse_price,same_day_markup_percent,same_day_estimated_delta,warehouse_delta,days_remaining,status,reason,run_started_at,run_finished_at,run_outcome,run_diagnostic,source_diagnostic_channel,source_diagnostic_source,source_diagnostic_status,source_diagnostic_observed_at,source_diagnostic_message',
     );
     expect(csv).toContain(
       'purchase,1207907,"Kirkland, Premium ""Paper""",110,2026-08-14T18:02:03Z,2,$16.99,$2.00,$15.99,$14.99,verified_warehouse_api,2026-08-21T15:00:00Z,,$15.99,receipt_history,2026-08-14T18:02:03Z,,$14.49,"Save $3, warehouse only",warehouse_savings_page',
@@ -117,6 +117,46 @@ describe('writeFullReport', () => {
     const html = readFileSync(files.htmlFile, 'utf8');
     expect(html).toContain('Unavailable — not_warehouse_price');
     expect(html).toContain('$10.99');
+  });
+
+  it('labels the inverse-markup Same-Day estimate as estimated, never verified warehouse pricing', async () => {
+    const paths = appPaths(createTemporaryHome());
+    const original = sampleReport({
+      ...samplePriceChannels(),
+      warehouse: unavailablePrice('warehouse', 'not_warehouse_price'),
+      sameDay: availablePrice('same_day', 1_531, 'costco_same_day_zip_98029'),
+    });
+    const originalRow = original.rows[0];
+    if (!originalRow) throw new Error('fixture row missing');
+    const report: FullRunReport = {
+      ...original,
+      rows: [
+        {
+          ...originalRow,
+          sameDayWarehouseEstimateCents: 1_349,
+          sameDayMarkupPercent: 13.5,
+          sameDayEstimatedDeltaCents: 250,
+          warehouseDeltaCents: null,
+          status: 'estimated_opportunity',
+          reason: 'same_day_estimate_lower_manual_verification_required',
+        },
+      ],
+    };
+
+    const files = await writeFullReport(paths, report);
+    const csv = readFileSync(files.csvFile, 'utf8');
+    const html = readFileSync(files.htmlFile, 'utf8');
+
+    expect(csv).toContain('$15.31,costco_same_day_zip_98029');
+    expect(csv).toContain(
+      '$13.49,13.5%,$2.50,Unavailable,23,estimated_opportunity',
+    );
+    expect(html).toContain('Same-Day corrected warehouse estimate (13.5%)');
+    expect(html).toContain('$13.49');
+    expect(html).toContain('estimated_opportunity');
+    expect(html).toContain('Manual warehouse verification required');
+    expect(html).toContain('Current warehouse');
+    expect(html).toContain('Unavailable — not_warehouse_price');
   });
 
   it('keeps historical receipt evidence separate and refuses to report it as a candidate', async () => {
@@ -302,7 +342,7 @@ describe('writeFullReport', () => {
     expect(csvLines[2]).toContain('costco_orders,error');
     expect(csvLines[2]).toContain('Authentication required');
     expect(new Set(csvLines.map((line) => line.split(',').length))).toEqual(
-      new Set([43]),
+      new Set([46]),
     );
     const html = readFileSync(files.htmlFile, 'utf8');
     expect(html).toContain('Authentication required');
@@ -327,6 +367,9 @@ function sampleReport(
       paidUnitCents: 1_599,
     },
     prices,
+    sameDayWarehouseEstimateCents: null,
+    sameDayMarkupPercent: 13.5,
+    sameDayEstimatedDeltaCents: null,
     warehouseDeltaCents: 100,
     daysRemaining: 23,
     status: 'candidate',

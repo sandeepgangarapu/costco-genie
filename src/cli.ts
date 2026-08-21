@@ -148,6 +148,7 @@ function formatRunSummary(summary: RunSummary): string {
     `Observations: ${String(summary.observationsRecorded)}`,
     `Unresolved: ${String(summary.unresolvedPrices)}`,
     `Potential adjustments: ${String(summary.candidatesFound)}`,
+    `Estimated opportunities: ${String(summary.estimatedOpportunitiesFound ?? 0)}`,
     `Alerts delivered: ${String(summary.alertsSent)}`,
     ...(summary.reportFiles === undefined
       ? []

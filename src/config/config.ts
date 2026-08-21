@@ -15,6 +15,9 @@ const configSchema = z.object({
   emailRecipient: z.string().email().nullable(),
   priceBatchSize: z.number().int().min(1).max(25),
   minimumSavingsCents: z.number().int().min(0),
+  sameDayMarkupPercent: z.number().positive().lt(100),
+  sameDayPostalCode: z.string().regex(/^\d{5}$/u),
+  sameDayRepresentativeAddress: z.string().trim().min(1),
 });
 
 export type AppConfig = Readonly<z.infer<typeof configSchema>>;
@@ -27,6 +30,9 @@ export const DEFAULT_CONFIG: AppConfig = Object.freeze({
   emailRecipient: null,
   priceBatchSize: 25,
   minimumSavingsCents: 1,
+  sameDayMarkupPercent: 13.5,
+  sameDayPostalCode: '98029',
+  sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
 });
 
 function ensureDirectories(paths: AppPaths): void {

@@ -326,6 +326,118 @@ describe('fetchWarehousePrices', () => {
   );
 });
 
+describe('Same-Day report evidence', () => {
+  it('uses exact-item guest storefront pricing localized to the configured ZIP', async () => {
+    const sameDayCalls: unknown[] = [];
+    const fetchFn: typeof fetch = async (input) =>
+      String(input).includes('/warehouse-savings')
+        ? new Response('<p>No current advertised items</p>')
+        : productResponse([]);
+
+    const result = await fetchReportPriceEvidence([request('1753490', '110')], {
+      fetchFn,
+      now: () => new Date(observedAt),
+      sameDayMarkupPercent: 13.5,
+      sameDayPostalCode: '98029',
+      sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
+      sameDayPriceFetcher: async (requests, options) => {
+        sameDayCalls.push({ requests, options });
+        return [
+          {
+            channel: 'same_day',
+            itemNumber: '1753490',
+            warehouseNumber: '110',
+            observedAt,
+            promotionText: null,
+            source: 'same_day_guest_storefront_zip_98029',
+            unavailableReason: null,
+            unitPriceCents: 1531,
+          },
+        ];
+      },
+    });
+
+    expect(sameDayCalls).toEqual([
+      {
+        requests: [{ itemNumber: '1753490', warehouseNumber: '110' }],
+        options: expect.objectContaining({
+          postalCode: '98029',
+          deliveryAddress: '2520 NE Park Dr, Issaquah, WA 98029',
+          timeout: 180_000,
+        }),
+      },
+    ]);
+    expect(result.items[0]?.prices.sameDay).toMatchObject({
+      unitPriceCents: 1531,
+      source: 'same_day_guest_storefront_zip_98029',
+    });
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        channel: 'same_day',
+        source: 'same_day_guest_storefront_zip_98029',
+        status: 'ok',
+      }),
+    );
+  });
+
+  it('keeps other evidence when the Same-Day source unexpectedly rejects', async () => {
+    const fetchFn: typeof fetch = async (input) =>
+      String(input).includes('/warehouse-savings')
+        ? new Response('<p>No current advertised items</p>')
+        : productResponse([product('1753490', '17.99', 'ONLINE')]);
+
+    const result = await fetchReportPriceEvidence([request('1753490', '110')], {
+      fetchFn,
+      now: () => new Date(observedAt),
+      sameDayMarkupPercent: 13.5,
+      sameDayPostalCode: '98029',
+      sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
+      sameDayPriceFetcher: async () => {
+        throw new Error('storefront crashed');
+      },
+    });
+
+    expect(result.items[0]?.prices.costcoCom.unitPriceCents).toBe(1799);
+    expect(result.items[0]?.prices.sameDay).toMatchObject({
+      unitPriceCents: null,
+      unavailableReason: 'source_failed',
+    });
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ channel: 'same_day', status: 'error' }),
+    );
+  });
+
+  it('marks a Same-Day overall deadline as a source error', async () => {
+    const fetchFn: typeof fetch = async (input) =>
+      String(input).includes('/warehouse-savings')
+        ? new Response('<p>No current advertised items</p>')
+        : productResponse([]);
+    const result = await fetchReportPriceEvidence([request('1753490', '110')], {
+      fetchFn,
+      now: () => new Date(observedAt),
+      sameDayMarkupPercent: 13.5,
+      sameDayPostalCode: '98029',
+      sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
+      sameDayPriceFetcher: async () => [
+        {
+          channel: 'same_day',
+          itemNumber: '1753490',
+          warehouseNumber: '110',
+          observedAt,
+          promotionText: null,
+          source: 'same_day_guest_storefront_zip_98029',
+          unavailableReason: 'deadline_exceeded',
+          unitPriceCents: null,
+        },
+      ],
+    });
+
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ channel: 'same_day', status: 'error' }),
+    );
+  });
+});
+
 describe('fetchReportPriceEvidence', () => {
   it('separates online prices and accepts only current exact-item Warehouse Savings final prices', async () => {
     // Sanitized from the live 2026-08-21 page: global validity copy plus the
