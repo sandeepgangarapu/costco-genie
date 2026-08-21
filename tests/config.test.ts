@@ -44,6 +44,7 @@ describe('loadConfig', () => {
       sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
       scheduledHour: 9,
       scheduledMinute: 0,
+      scheduledIntervalDays: 1,
     });
     expect(existsSync(paths.dataDir)).toBe(true);
     expect(existsSync(paths.browserProfileDir)).toBe(true);
@@ -130,6 +131,7 @@ describe('loadConfig', () => {
     { adjustmentWindowDays: 0 },
     { scheduledHour: 24 },
     { scheduledMinute: 60 },
+    { scheduledIntervalDays: 0 },
     { priceBatchSize: 26 },
     { minimumSavingsCents: -1 },
     { sameDayMarkupPercent: 0 },

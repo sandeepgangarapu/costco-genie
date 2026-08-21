@@ -30,7 +30,7 @@ import {
 import type { FullReportFiles } from '../notifications/full-report.js';
 import type { AlertChannel, Database } from '../storage/database.js';
 
-const FRESHNESS_MILLISECONDS = 20 * 60 * 60 * 1000;
+const HOUR_MILLISECONDS = 60 * 60 * 1000;
 const ALERT_TITLE = 'Potential Costco price adjustments';
 const AUTH_TITLE = 'Costco sign-in required';
 // Conservative internal deadline for unofficial HTTP calls held under the lock.
@@ -118,7 +118,11 @@ async function runLocked(
   const startedAt = started.toISOString();
   if (
     options.scheduled === true &&
-    isFresh(dependencies.database.getLastSuccessfulRun(), started)
+    isFresh(
+      dependencies.database.getLastSuccessfulRun(),
+      started,
+      scheduledFreshnessMilliseconds(dependencies.config.scheduledIntervalDays),
+    )
   ) {
     const skipped = emptySummary(
       startedAt,
@@ -810,12 +814,20 @@ function uniquePriceRequests(
   return [...requests.values()];
 }
 
-function isFresh(lastSuccess: RunSummary | null, now: Date): boolean {
+function scheduledFreshnessMilliseconds(intervalDays: number): number {
+  return intervalDays * 24 * HOUR_MILLISECONDS - 4 * HOUR_MILLISECONDS;
+}
+
+function isFresh(
+  lastSuccess: RunSummary | null,
+  now: Date,
+  freshnessMilliseconds: number,
+): boolean {
   if (!lastSuccess) return false;
   const finishedAt = Date.parse(lastSuccess.finishedAt);
   if (!Number.isFinite(finishedAt)) return false;
   const age = now.getTime() - finishedAt;
-  return age >= 0 && age < FRESHNESS_MILLISECONDS;
+  return age >= 0 && age < freshnessMilliseconds;
 }
 
 function dateDaysBefore(now: Date, days: number): string {

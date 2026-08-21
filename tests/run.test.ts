@@ -906,6 +906,50 @@ describe('runPriceCheck', () => {
     deps.database.close();
   });
 
+  it('skips a three-day-interval scheduled run until the freshness window elapses', async () => {
+    const config = { ...DEFAULT_CONFIG, scheduledIntervalDays: 3 };
+    const prior = {
+      alertsSent: 0,
+      candidatesFound: 0,
+      finishedAt: '2026-08-15T21:00:01.000Z',
+      observationsRecorded: 0,
+      outcome: 'success' as const,
+      purchasesProcessed: 0,
+      startedAt: '2026-08-15T21:00:00.000Z',
+      unresolvedPrices: 0,
+    };
+
+    const freshDeps = dependencies({ config });
+    freshDeps.database.finishRun(
+      freshDeps.database.beginRun(prior.startedAt),
+      prior,
+    );
+
+    const skipped = await runPriceCheck(freshDeps, {
+      now: () => new Date('2026-08-18T16:59:00.000Z'),
+      scheduled: true,
+    });
+
+    expect(skipped.outcome).toBe('skipped');
+    expect(freshDeps.localNotifier.messages).toEqual([]);
+    freshDeps.database.close();
+
+    const elapsedDeps = dependencies({ config });
+    elapsedDeps.database.finishRun(
+      elapsedDeps.database.beginRun(prior.startedAt),
+      prior,
+    );
+
+    const ran = await runPriceCheck(elapsedDeps, {
+      now: () => new Date('2026-08-18T17:00:01.000Z'),
+      scheduled: true,
+    });
+
+    expect(ran.outcome).toBe('success');
+    expect(ran.purchasesProcessed).toBe(1);
+    elapsedDeps.database.close();
+  });
+
   it('runs when the recorded successful finish time is in the future', async () => {
     const deps = dependencies();
     const prior = {
