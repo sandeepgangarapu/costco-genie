@@ -1,0 +1,41 @@
+[
+  {
+    "warehouseName": "Costco Wholesale",
+    "transactionDateTime": "2026-08-10T18:30:00.000Z",
+    "transactionDate": "08/10/2026",
+    "warehouseNumber": "129",
+    "registerNumber": "7",
+    "transactionNumber": "4567",
+    "transactionType": "Purchase",
+    "transactionBarcode": "211290123456789",
+    "itemArray": [
+      {
+        "itemNumber": "100978861",
+        "itemDescription01": "Kirkland Trail Mix",
+        "unit": "2",
+        "amount": "19.98"
+      },
+      {
+        "itemNumber": "broken-line",
+        "itemDescription01": "Missing amount",
+        "unit": "1"
+      }
+    ],
+    "couponArray": [
+      {
+        "upcnumberCoupon": "100978861",
+        "associatedItemNumber": "100978861",
+        "amountCoupon": "-2.00"
+      },
+      {
+        "upcnumberCoupon": "broken-coupon"
+      }
+    ]
+  },
+  {
+    "transactionDateTime": "2026-08-11T18:30:00.000Z",
+    "warehouseNumber": "129",
+    "transactionType": "Purchase",
+    "itemArray": []
+  }
+]

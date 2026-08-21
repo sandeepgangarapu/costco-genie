@@ -1,0 +1,158 @@
+[
+  {
+    "transactionType": "Sales",
+    "transactionDateTime": "2023-10-25T14:30:00",
+    "warehouseNumber": 1,
+    "registerNumber": 6,
+    "transactionNumber": 297,
+    "transactionBarcode": "21000100602972310251430",
+    "itemArray": [
+      {
+        "itemNumber": 17120,
+        "itemDescription01": "GYRO KIT",
+        "itemUnitPriceAmount": 13.49,
+        "unit": 1,
+        "amount": 21.75,
+        "refundFlag": null,
+        "voidFlag": null
+      },
+      {
+        "itemNumber": 1715281,
+        "itemDescription01": "TPD/17120",
+        "itemUnitPriceAmount": 0,
+        "unit": -1,
+        "amount": -3,
+        "refundFlag": null,
+        "voidFlag": null
+      },
+      {
+        "itemNumber": 1661969,
+        "itemDescription01": "BULGOGI BOWL",
+        "itemUnitPriceAmount": 16.99,
+        "unit": 1,
+        "amount": 16.99,
+        "refundFlag": null,
+        "voidFlag": null
+      },
+      {
+        "itemNumber": 300003,
+        "itemDescription01": "UNRELATED ITEM",
+        "itemUnitPriceAmount": 10,
+        "unit": 1,
+        "amount": 10,
+        "refundFlag": null,
+        "voidFlag": null
+      },
+      {
+        "itemNumber": 399999,
+        "itemDescription01": "MVM/999999",
+        "itemUnitPriceAmount": 0,
+        "unit": -1,
+        "amount": -1,
+        "refundFlag": null,
+        "voidFlag": null
+      },
+      {
+        "itemNumber": 377777,
+        "itemDescription01": "CPN/17120",
+        "itemUnitPriceAmount": 1,
+        "unit": 1,
+        "amount": 1,
+        "refundFlag": null,
+        "voidFlag": null
+      },
+      {
+        "itemNumber": 400004,
+        "itemDescription01": "VOIDED ITEM",
+        "itemUnitPriceAmount": 5,
+        "unit": 1,
+        "amount": 5,
+        "refundFlag": null,
+        "voidFlag": true
+      },
+      {
+        "itemNumber": 500005,
+        "itemDescription01": "REFUNDED ITEM",
+        "itemUnitPriceAmount": 6,
+        "unit": 1,
+        "amount": 6,
+        "refundFlag": 1,
+        "voidFlag": null
+      }
+    ],
+    "couponArray": [
+      {
+        "couponNumber": 700001,
+        "upcnumberCoupon": 123456789012,
+        "associatedItemNumber": 0,
+        "unitCoupon": 1,
+        "amountCoupon": -9,
+        "voidflagCoupon": null,
+        "refundflagCoupon": null
+      },
+      {
+        "couponNumber": 700002,
+        "upcnumberCoupon": 998877665544,
+        "associatedItemNumber": 1661969,
+        "unitCoupon": 1,
+        "amountCoupon": -2,
+        "voidflagCoupon": null,
+        "refundflagCoupon": null
+      },
+      {
+        "couponNumber": 700003,
+        "associatedItemNumber": 1661969,
+        "unitCoupon": 1,
+        "amountCoupon": -5,
+        "voidflagCoupon": true,
+        "refundflagCoupon": null
+      },
+      {
+        "couponNumber": 700004,
+        "associatedItemNumber": 1661969,
+        "unitCoupon": 1,
+        "amountCoupon": -7,
+        "voidflagCoupon": null,
+        "refundflagCoupon": 1
+      }
+    ]
+  },
+  {
+    "transactionType": "Purchase",
+    "transactionDateTime": "2026-08-12T09:15:00",
+    "warehouseNumber": 129,
+    "registerNumber": 4,
+    "transactionNumber": 88,
+    "itemArray": [
+      {
+        "itemNumber": 200002,
+        "itemDescription01": "NO BARCODE ITEM",
+        "itemUnitPriceAmount": 7.5,
+        "unit": 2,
+        "amount": 15,
+        "refundFlag": null,
+        "voidFlag": null
+      }
+    ],
+    "couponArray": []
+  },
+  {
+    "transactionType": "Return",
+    "transactionDateTime": "2026-08-13T09:15:00",
+    "warehouseNumber": 129,
+    "registerNumber": 4,
+    "transactionNumber": 89,
+    "itemArray": [
+      {
+        "itemNumber": 600006,
+        "itemDescription01": "RETURN RECEIPT ITEM",
+        "itemUnitPriceAmount": 20,
+        "unit": 1,
+        "amount": 20,
+        "refundFlag": null,
+        "voidFlag": null
+      }
+    ],
+    "couponArray": []
+  }
+]

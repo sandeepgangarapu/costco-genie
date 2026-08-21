@@ -1,0 +1,47 @@
+{
+  "transactions": [
+    {
+      "receiptId": "receipt-2026-08-01-001",
+      "purchasedAt": "2026-08-01T16:30:00.000Z",
+      "warehouseNumber": "123",
+      "transactionType": "purchase",
+      "items": [
+        {
+          "itemNumber": "100001",
+          "quantity": 2,
+          "unitPrice": "12.50"
+        },
+        {
+          "itemNumber": "100001",
+          "quantity": 1,
+          "unitPrice": "12.50"
+        },
+        {
+          "itemNumber": "not-an-item-number",
+          "quantity": 1,
+          "unitPrice": "4.99"
+        }
+      ],
+      "coupons": [
+        {
+          "itemNumber": "100001",
+          "amount": "-2.00"
+        }
+      ]
+    },
+    {
+      "receiptId": "receipt-2026-08-02-refund",
+      "purchasedAt": "2026-08-02T16:30:00.000Z",
+      "warehouseNumber": "123",
+      "transactionType": "refund",
+      "items": [
+        {
+          "itemNumber": "100001",
+          "quantity": 1,
+          "unitPrice": "12.50"
+        }
+      ],
+      "coupons": []
+    }
+  ]
+}
