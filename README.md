@@ -22,22 +22,24 @@ It repeats this automatically every morning (or on any interval you choose), and
 **What you need:**
 
 - A Mac running macOS, with **Apple Mail** set up and at least one enabled account
-- **Node.js 22.13.0 or newer**
+- **NVM** (recommended), or **Node.js 22.13.0 or newer** with npm
 - **Google Chrome** (used once so you can sign in to Costco; your password is never seen or stored by the tool)
 - **Xcode Command Line Tools**, if `npm` needs to compile native modules (`xcode-select --install`)
 
+The checked-in `./costco` launcher is the only command entry point you need. When NVM is installed, it installs and selects the Node version pinned in `.nvmrc`. It also refreshes native dependencies when the Node ABI or lockfile changes, builds the CLI, and then runs the requested command. This prevents a dependency compiled by one Node version from being loaded by another.
+
 These are the **one-time** things you have to do yourself. After this, everything runs on its own.
 
-1. **Install the tool** — from the project checkout, run:
+1. **Set up the tool** — from the project checkout, run one command:
 
    ```sh
-   npm ci && npm run build && npm link && costco setup
+   ./costco setup
    ```
 
 2. **Sign in to Costco once** — run:
 
    ```sh
-   costco login
+   ./costco login
    ```
 
    A dedicated Chrome window opens. Sign in manually—including any MFA or CAPTCHA—then close that window. This is the only time your Costco account is involved interactively. The tool never sees or stores your password; the session lives in that Chrome profile.
@@ -47,13 +49,13 @@ These are the **one-time** things you have to do yourself. After this, everythin
 4. **Turn on automatic runs** — run:
 
    ```sh
-   costco install-agent
+   ./costco install-agent
    ```
 
 5. **Check everything is ready** (optional but recommended):
 
    ```sh
-   costco doctor
+   ./costco doctor
    ```
 
 > **What happens after setup — no action needed from you:**
@@ -62,15 +64,15 @@ These are the **one-time** things you have to do yourself. After this, everythin
 > - It also runs whenever you log in to or wake your Mac—but only if the last successful check was more than 20 hours ago, so unlocking your Mac does not cause duplicate checks.
 > - When it finds something you bought that is now cheaper, you get a **macOS notification** and a **plain-text email** with the item, prices, and potential savings.
 > - The same purchase is never alerted twice for the same price.
-> - If your Costco sign-in ever expires, you get one notification telling you to run `costco login` again. That is the only maintenance you may ever need to redo.
-> - Nothing else touches Costco: `costco status` and `costco doctor` are offline, and all your data stays in `~/.costco-price-matcher/`.
+> - If your Costco sign-in ever expires, you get one notification telling you to run `./costco login` again. That is the only maintenance you may ever need to redo.
+> - Nothing else touches Costco: `./costco status` and `./costco doctor` are offline, and all your data stays in `~/.costco-price-matcher/`.
 
 ### Run your first check right now (optional)
 
 You don't have to wait until tomorrow's scheduled run:
 
 ```sh
-costco run
+./costco run
 ```
 
 This contacts Costco, imports up to 35 days of receipts, checks current prices, and may send notifications and email right away.
@@ -103,28 +105,28 @@ Defaults:
 | `sameDayPostalCode`            | `'98029'`                               | Postal code used for Same-Day price estimates                                         |
 | `sameDayRepresentativeAddress` | `'2520 NE Park Dr, Issaquah, WA 98029'` | Representative warehouse address for Same-Day estimates                               |
 
-The configuration contains non-secret settings only. After changing scheduling-related values (`scheduledHour`, `scheduledMinute`, `scheduledIntervalDays`), run `costco install-agent` again.
+The configuration contains non-secret settings only. After changing scheduling-related values (`scheduledHour`, `scheduledMinute`, `scheduledIntervalDays`), run `./costco install-agent` again.
 
 ### Run manually
 
 ```sh
-costco run     # live receipt and price check; may send alerts
-costco status  # local paths and last successful run; contacts nothing
+./costco run     # live receipt and price check; may send alerts
+./costco status  # local paths and last successful run; contacts nothing
 ```
 
-Receipt requests and each sequential price batch have a conservative 30-second deadline, and noninteractive helper commands use the same bound. Manual `costco login` browser interaction is intentionally not given this short deadline.
+Receipt requests and each sequential price batch have a conservative 30-second deadline, and noninteractive helper commands use the same bound. Manual `./costco login` browser interaction is intentionally not given this short deadline.
 
 Useful run exit codes are:
 
 - `0`: success, or a fresh scheduled run was skipped
 - `1`: failed
 - `2`: partial failure, such as an unresolved price batch or notification-channel error
-- `3`: Costco authentication required; run `costco login`
+- `3`: Costco authentication required; run `./costco login`
 
 For command help:
 
 ```sh
-costco --help
+./costco --help
 ```
 
 To run the unauthenticated, read-only public coverage sample directly from the checkout:
@@ -137,11 +139,11 @@ The probe reports the sample as resolved or unresolved; it does not claim genera
 
 ### Scheduler
 
-Build the project with Node 22.13.0 or newer before installing the agent, then run `costco install-agent`.
+Run `./costco install-agent`. The launcher selects the pinned supported Node runtime and builds the project before the agent is installed.
 
 The generated user LaunchAgent runs at login and daily at 09:00 by default. Its scheduled invocation uses a freshness check of four hours less than `scheduledIntervalDays` days (20 hours by default), so waking or logging in does not duplicate a recent successful run. With `scheduledIntervalDays` set to 3, a successful run suppresses the next two daily triggers and the next run happens on the third day at 09:00.
 
-The installer pins absolute paths to the current Node executable, compiled CLI, checkout, and logs. It rejects a missing/non-executable Node target, Node older than 22.13.0, or a missing compiled CLI. **Run `costco install-agent` again after moving the checkout or changing, upgrading, or removing the pinned Node installation.**
+The installer pins absolute paths to the current Node executable, compiled CLI, checkout, and logs. It rejects a missing/non-executable Node target, Node older than 22.13.0, or a missing compiled CLI. **Run `./costco install-agent` again after moving the checkout or changing, upgrading, or removing the pinned Node installation.**
 
 The installer writes and validates:
 
@@ -156,7 +158,7 @@ If a later step fails, the installer restores the old plist atomically and reloa
 To unload the agent and remove its plist:
 
 ```sh
-costco uninstall-agent
+./costco uninstall-agent
 ```
 
 Uninstall boots out `gui/<uid>/com.costco-price-matcher.daily` by label, so it can still unload the service when the plist is missing or corrupt. It then removes the plist if present. It does not delete receipts, observations, configuration, logs, or the dedicated browser profile.
@@ -192,14 +194,14 @@ The product service does not expose a usable warehouse price for every receipt i
 
 ### Troubleshooting
 
-- **`costco login` recovery appears:** run `costco login`, complete sign-in manually, close the dedicated window, and retry `costco run`. Doctor can confirm that the profile directory exists, but intentionally does not contact Costco to validate the live session. The tool does not bypass MFA or CAPTCHA.
+- **`./costco login` recovery appears:** run `./costco login`, complete sign-in manually, close the dedicated window, and retry `./costco run`. Doctor can confirm that the profile directory exists, but intentionally does not contact Costco to validate the live session. The tool does not bypass MFA or CAPTCHA.
 - **Chrome profile is already in use:** close the dedicated Costco Chrome window before running a live check. Doctor only checks whether the profile directory exists and does not launch Chrome.
-- **`install-agent` rejects Node:** use Node 22.13.0 or newer, rebuild, and reinstall. The scheduler intentionally refuses an older, missing, directory-valued, or non-executable Node target and a missing compiled CLI.
-- **Checkout or Node moved after installation:** rebuild if needed and run `costco install-agent` again so launchd receives the new absolute paths.
-- **Plist is missing or corrupt during uninstall:** `costco uninstall-agent` unloads the known service label directly and does not depend on parsing the plist.
+- **The launcher rejects Node:** install NVM, or install Node 22.13.0 or newer with npm, then rerun the same `./costco` command.
+- **Checkout or Node moved after installation:** run `./costco install-agent` again so launchd receives the new absolute paths.
+- **Plist is missing or corrupt during uninstall:** `./costco uninstall-agent` unloads the known service label directly and does not depend on parsing the plist.
 - **Mail account is not visible:** open Mail, finish account setup, confirm the account is enabled, and review Automation permission in System Settings.
-- **Scheduled run has no output:** inspect `~/.costco-price-matcher/logs/stdout.log` and `stderr.log`, then run `costco status` and `costco doctor` interactively.
+- **Scheduled run has no output:** inspect `~/.costco-price-matcher/logs/stdout.log` and `stderr.log`, then run `./costco status` and `./costco doctor` interactively.
 - **Many unresolved items:** this can be a normal provider coverage limitation. It may also indicate that Costco changed its unofficial API; unresolved results are intentionally not treated as price drops.
-- **Native module installation fails:** install or update Xcode Command Line Tools, use a supported Node version, remove `node_modules`, and rerun `npm ci`.
+- **Native module installation fails:** install or update Xcode Command Line Tools, then rerun the same `./costco` command. The launcher will retry the dependency refresh.
 - **Another run holds the lock:** wait for it to finish. If no process is running, the stable lock file may remain; that is harmless because only the kernel-held lock denotes ownership.
-- **Configuration is invalid:** correct `~/.costco-price-matcher/config.json` using the documented ranges, or move it aside and rerun `costco setup`.
+- **Configuration is invalid:** correct `~/.costco-price-matcher/config.json` using the documented ranges, or move it aside and rerun `./costco setup`.

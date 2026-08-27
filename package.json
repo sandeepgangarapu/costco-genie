@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "costco": "dist/cli.js"
+    "costco": "costco"
   },
   "engines": {
     "node": ">=22.13.0"

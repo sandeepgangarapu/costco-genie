@@ -1,0 +1,58 @@
+#!/bin/sh
+
+set -eu
+
+launcher_path=$0
+while [ -L "$launcher_path" ]; do
+  launcher_directory=$(CDPATH= cd -- "$(dirname -- "$launcher_path")" && pwd -P)
+  launcher_target=$(readlink "$launcher_path")
+  case "$launcher_target" in
+    /*) launcher_path=$launcher_target ;;
+    *) launcher_path=$launcher_directory/$launcher_target ;;
+  esac
+done
+
+project_directory=$(CDPATH= cd -- "$(dirname -- "$launcher_path")" && pwd -P)
+cd "$project_directory"
+
+nvm_directory=${NVM_DIR:-"$HOME/.nvm"}
+if [ -s "$nvm_directory/nvm.sh" ]; then
+  # NVM is a shell function, so it must be loaded into this process.
+  # shellcheck disable=SC1090
+  . "$nvm_directory/nvm.sh"
+  nvm install
+  nvm use --silent
+fi
+
+if ! command -v node >/dev/null 2>&1 || ! node -e '
+  const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
+  process.exit(major > 22 || (major === 22 && minor >= 13) ? 0 : 1);
+'; then
+  printf '%s\n' \
+    'Node 22.13.0 or newer is required; install NVM, or install Node 22.13.0 or newer with npm, then rerun ./costco.' \
+    >&2
+  exit 1
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  printf '%s\n' 'npm is required but was not found on PATH.' >&2
+  exit 1
+fi
+
+runtime_key=$(node -p \
+  '`${process.platform}-${process.arch}-abi${process.versions.modules}`')
+runtime_stamp=node_modules/.costco-runtime
+installed_runtime=''
+if [ -f "$runtime_stamp" ]; then
+  installed_runtime=$(sed -n '1p' "$runtime_stamp")
+fi
+
+if [ ! -d node_modules ] || \
+  [ "$installed_runtime" != "$runtime_key" ] || \
+  [ package-lock.json -nt "$runtime_stamp" ]; then
+  npm ci --silent
+  printf '%s\n' "$runtime_key" > "$runtime_stamp"
+fi
+
+npm run build --silent
+exec node dist/cli.js "$@"
