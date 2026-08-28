@@ -570,7 +570,7 @@ async function writeTerminalReport(
   sourceDiagnostics: readonly ReportSourceDiagnostic[],
 ): Promise<RunSummary> {
   const reportFiles = await dependencies.writeFullReport({
-    schemaVersion: 1,
+    schemaVersion: 2,
     startedAt: summary.startedAt,
     finishedAt: summary.finishedAt,
     outcome: summary.outcome,
@@ -596,21 +596,24 @@ function fullReportRows(
     const currentEvidence = evidenceByKey.get(priceKey(row.purchase));
     const isOnline = row.purchase.purchaseChannel === 'costco_com';
     const prices: ReportPriceChannels = {
-      warehouse:
-        currentEvidence?.warehouse ??
-        reportWarehouseObservation(row.warehousePrice),
+      warehouse: isOnline
+        ? unavailableReportPrice('warehouse', 'not_applicable')
+        : (currentEvidence?.warehouse ??
+          reportWarehouseObservation(row.warehousePrice)),
       receiptHistory: isOnline
         ? unavailableReportPrice('receipt_history', 'not_applicable')
         : laterReceiptEvidence(row.purchase, purchases),
-      warehouseSavings:
-        currentEvidence?.warehouseSavings ??
-        unavailableReportPrice('warehouse_savings', 'source_not_configured'),
+      warehouseSavings: isOnline
+        ? unavailableReportPrice('warehouse_savings', 'not_applicable')
+        : (currentEvidence?.warehouseSavings ??
+          unavailableReportPrice('warehouse_savings', 'source_not_configured')),
       costcoCom:
         currentEvidence?.costcoCom ??
         unavailableReportPrice('costco_com', 'source_not_configured'),
-      sameDay:
-        currentEvidence?.sameDay ??
-        unavailableReportPrice('same_day', 'source_not_configured'),
+      sameDay: isOnline
+        ? unavailableReportPrice('same_day', 'not_applicable')
+        : (currentEvidence?.sameDay ??
+          unavailableReportPrice('same_day', 'source_not_configured')),
     };
     const sameDayWarehouseEstimateCents = usableReportPrice(prices.sameDay)
       ? inverseMarkupCents(
@@ -640,9 +643,22 @@ function fullReportRows(
     const onlineStatus = isOnline
       ? onlineReportStatus(row, prices.costcoCom, onlineCandidatePurchaseIds)
       : null;
+    const status =
+      onlineStatus === null
+        ? estimatedOpportunity
+          ? 'estimated_opportunity'
+          : row.status
+        : onlineStatus.status;
+    const comparison = reportComparison(
+      row.purchase,
+      prices,
+      status,
+      sameDayWarehouseEstimateCents,
+    );
     return {
       purchase: row.purchase,
       prices,
+      ...comparison,
       sameDayWarehouseEstimateCents: isOnline
         ? null
         : sameDayWarehouseEstimateCents,
@@ -650,12 +666,7 @@ function fullReportRows(
       sameDayEstimatedDeltaCents: isOnline ? null : sameDayEstimatedDeltaCents,
       warehouseDeltaCents: isOnline ? null : row.warehouseDeltaCents,
       daysRemaining: row.daysRemaining,
-      status:
-        onlineStatus === null
-          ? estimatedOpportunity
-            ? 'estimated_opportunity'
-            : row.status
-          : onlineStatus.status,
+      status,
       reason:
         onlineStatus === null
           ? estimatedOpportunity
@@ -664,6 +675,100 @@ function fullReportRows(
           : onlineStatus.reason,
     };
   });
+}
+
+function reportComparison(
+  purchase: Purchase,
+  prices: ReportPriceChannels,
+  status: FullRunReport['rows'][number]['status'],
+  sameDayWarehouseEstimateCents: number | null,
+): Pick<
+  FullRunReport['rows'][number],
+  | 'comparisonChannel'
+  | 'comparisonDeltaCents'
+  | 'comparisonUnitCents'
+  | 'potentialSavingsCents'
+> {
+  if (purchase.purchaseChannel === 'costco_com') {
+    return isUsableOnlinePrice(prices.costcoCom)
+      ? comparisonValues(
+          purchase,
+          'costco_com',
+          prices.costcoCom.unitPriceCents,
+        )
+      : unavailableComparison();
+  }
+  if (usableReportPrice(prices.warehouse)) {
+    return comparisonValues(
+      purchase,
+      'warehouse',
+      prices.warehouse.unitPriceCents,
+    );
+  }
+  if (
+    status === 'estimated_opportunity' &&
+    sameDayWarehouseEstimateCents !== null
+  ) {
+    return comparisonValues(
+      purchase,
+      'same_day',
+      sameDayWarehouseEstimateCents,
+    );
+  }
+  return unavailableComparison();
+}
+
+function comparisonValues(
+  purchase: Purchase,
+  comparisonChannel: NonNullable<
+    FullRunReport['rows'][number]['comparisonChannel']
+  >,
+  comparisonUnitCents: number,
+): Pick<
+  FullRunReport['rows'][number],
+  | 'comparisonChannel'
+  | 'comparisonDeltaCents'
+  | 'comparisonUnitCents'
+  | 'potentialSavingsCents'
+> {
+  const comparisonDeltaCents = purchase.paidUnitCents - comparisonUnitCents;
+  const potentialSavingsCents = Math.max(
+    0,
+    comparisonDeltaCents * purchase.quantity,
+  );
+  if (
+    !Number.isSafeInteger(purchase.paidUnitCents) ||
+    purchase.paidUnitCents <= 0 ||
+    !Number.isSafeInteger(purchase.quantity) ||
+    purchase.quantity <= 0 ||
+    !Number.isSafeInteger(comparisonUnitCents) ||
+    comparisonUnitCents <= 0 ||
+    !Number.isSafeInteger(comparisonDeltaCents) ||
+    !Number.isSafeInteger(potentialSavingsCents)
+  ) {
+    return unavailableComparison();
+  }
+  return {
+    comparisonChannel,
+    comparisonDeltaCents,
+    comparisonUnitCents,
+    potentialSavingsCents,
+  };
+}
+
+function unavailableComparison(): Pick<
+  FullRunReport['rows'][number],
+  | 'comparisonChannel'
+  | 'comparisonDeltaCents'
+  | 'comparisonUnitCents'
+  | 'potentialSavingsCents'
+> {
+  return {
+    comparisonChannel: null,
+    comparisonDeltaCents: null,
+    comparisonUnitCents: null,
+    potentialSavingsCents: null,
+  };
 }
 
 function onlineReportStatus(
@@ -698,11 +803,20 @@ function onlineReportStatus(
 
 function usableReportPrice(
   price: ReportPriceObservation,
-): price is ReportPriceObservation & { readonly unitPriceCents: number } {
+): price is ReportPriceObservation & {
+  readonly observedAt: string;
+  readonly source: string;
+  readonly unitPriceCents: number;
+} {
   return (
     price.unitPriceCents !== null &&
     price.unitPriceCents > 0 &&
-    price.unavailableReason === null
+    Number.isSafeInteger(price.unitPriceCents) &&
+    price.unavailableReason === null &&
+    price.source !== null &&
+    price.source.length > 0 &&
+    price.observedAt !== null &&
+    Number.isFinite(Date.parse(price.observedAt))
   );
 }
 
@@ -815,6 +929,17 @@ function toWarehouseObservation(
   fallbackObservedAt: string,
 ): PriceObservation {
   const price = item.prices.warehouse;
+  if (!usableReportPrice(price)) {
+    return {
+      itemNumber: item.itemNumber,
+      warehouseNumber: item.warehouseNumber,
+      observedAt: price.observedAt ?? fallbackObservedAt,
+      source: price.source ?? 'price_sources',
+      unitPriceCents: null,
+      unresolvedReason:
+        price.unavailableReason ?? 'invalid_warehouse_price_evidence',
+    };
+  }
   return {
     itemNumber: item.itemNumber,
     warehouseNumber: item.warehouseNumber,

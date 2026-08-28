@@ -66,10 +66,18 @@ const CSV_COLUMNS = [
   'days_remaining',
   'status',
   'reason',
+  'purchase_channel',
+  'receipt_or_order',
+  'comparison_channel',
+  'comparison_price',
+  'unit_delta',
+  'potential_savings',
   'run_started_at',
   'run_finished_at',
   'run_outcome',
   'run_diagnostic',
+  'warehouse_purchase_lines',
+  'online_purchase_lines',
   'source_diagnostic_channel',
   'source_diagnostic_source',
   'source_diagnostic_status',
@@ -99,7 +107,7 @@ export async function writeFullReport(
   };
   const manifest = `${JSON.stringify(
     {
-      schemaVersion: 1,
+      schemaVersion: report.schemaVersion,
       startedAt: report.startedAt,
       files: {
         html: `${stem}.html`,
@@ -161,12 +169,15 @@ function replaceLatestReports(
 }
 
 function renderFullReportCsv(report: FullRunReport): string {
+  const coverage = reportCoverage(report);
   const runRow = csvRecord({
     record_type: 'run',
     run_started_at: report.startedAt,
     run_finished_at: report.finishedAt,
     run_outcome: report.outcome,
     run_diagnostic: report.diagnostic ?? '',
+    warehouse_purchase_lines: String(coverage.warehouse),
+    online_purchase_lines: String(coverage.costcoCom),
   });
   const purchaseRows = report.rows.map((row) => {
     const warehouse = row.prices.warehouse;
@@ -223,6 +234,12 @@ function renderFullReportCsv(report: FullRunReport): string {
         row.daysRemaining === null ? 'Unavailable' : String(row.daysRemaining),
       status: row.status,
       reason: row.reason ?? '',
+      purchase_channel: row.purchase.purchaseChannel,
+      receipt_or_order: row.purchase.receiptId,
+      comparison_channel: row.comparisonChannel ?? '',
+      comparison_price: formatOptionalCents(row.comparisonUnitCents),
+      unit_delta: formatOptionalCents(row.comparisonDeltaCents),
+      potential_savings: formatOptionalCents(row.potentialSavingsCents),
       run_started_at: report.startedAt,
       run_finished_at: report.finishedAt,
       run_outcome: report.outcome,
@@ -256,6 +273,7 @@ function csvField(value: string): string {
 }
 
 function renderFullReportHtml(report: FullRunReport): string {
+  const coverage = reportCoverage(report);
   const diagnostics = report.sourceDiagnostics
     .map(
       (diagnostic) =>
@@ -296,6 +314,7 @@ function renderFullReportHtml(report: FullRunReport): string {
   <div class="card">
     <p><strong>Outcome:</strong> ${escapeHtml(report.outcome)}</p>
     <p><strong>Run:</strong> <time datetime="${escapeHtml(report.startedAt)}">${escapeHtml(report.startedAt)}</time> to <time datetime="${escapeHtml(report.finishedAt)}">${escapeHtml(report.finishedAt)}</time></p>
+    <p><strong>Warehouse purchase lines:</strong> ${String(coverage.warehouse)} · <strong>Costco.com purchase lines:</strong> ${String(coverage.costcoCom)}</p>
     ${report.diagnostic === null ? '' : `<p><strong>Diagnostic:</strong> ${escapeHtml(report.diagnostic)}</p>`}
   </div>
   <section class="card table-wrap" aria-labelledby="purchase-lines-heading">
@@ -304,7 +323,7 @@ function renderFullReportHtml(report: FullRunReport): string {
     <table>
       <caption>Purchase-line price comparison</caption>
       <thead><tr>
-        <th scope="col">Item</th><th scope="col">Name</th><th scope="col">Warehouse</th><th scope="col">Purchased</th><th scope="col">Qty</th><th scope="col">Gross unit</th><th scope="col">Receipt discount</th><th scope="col">Net paid unit</th><th scope="col">Current warehouse</th><th scope="col">Historical receipt evidence</th><th scope="col">Warehouse Savings</th><th scope="col">Costco.com</th><th scope="col">Same-Day</th><th scope="col">Same-Day corrected warehouse estimate</th><th scope="col">Estimated delta</th><th scope="col">Warehouse delta</th><th scope="col">Days left</th><th scope="col">Status</th><th scope="col">Reason</th>
+        <th scope="col">Item</th><th scope="col">Name</th><th scope="col">Purchase channel</th><th scope="col">Receipt / order</th><th scope="col">Purchase location</th><th scope="col">Purchased</th><th scope="col">Active quantity</th><th scope="col">Gross unit</th><th scope="col">Receipt discount</th><th scope="col">Net paid unit</th><th scope="col">Comparison channel</th><th scope="col">Comparison price</th><th scope="col">Unit delta</th><th scope="col">Potential savings</th><th scope="col">Current warehouse</th><th scope="col">Historical receipt evidence</th><th scope="col">Warehouse Savings</th><th scope="col">Costco.com</th><th scope="col">Same-Day</th><th scope="col">Same-Day corrected warehouse estimate</th><th scope="col">Estimated delta</th><th scope="col">Warehouse delta</th><th scope="col">Days left</th><th scope="col">Status</th><th scope="col">Reason</th>
       </tr></thead>
       <tbody>${bodyRows}</tbody>
     </table>
@@ -323,12 +342,18 @@ function renderHtmlRow(row: FullReportRow): string {
   return `<tr>
   <td>${escapeHtml(row.purchase.itemNumber)}</td>
   <td>${escapeHtml(row.purchase.description ?? 'Unavailable')}</td>
-  <td>${escapeHtml(row.purchase.warehouseNumber)}</td>
+  <td>${comparisonChannelLabel(row.purchase.purchaseChannel)}</td>
+  <td>${escapeHtml(row.purchase.receiptId)}</td>
+  <td>${row.purchase.purchaseChannel === 'warehouse' ? `Warehouse ${escapeHtml(row.purchase.warehouseNumber)}` : 'Costco.com'}</td>
   <td><time datetime="${escapeHtml(row.purchase.purchasedAt)}">${escapeHtml(row.purchase.purchasedAt)}</time></td>
   <td>${String(row.purchase.quantity)}</td>
   <td>${formatOptionalCents(row.purchase.grossUnitCents ?? null)}</td>
   <td>${formatCents(row.purchase.couponCents)}</td>
   <td>${formatCents(row.purchase.paidUnitCents)}</td>
+  <td>${row.comparisonChannel === null ? 'Unavailable' : comparisonChannelLabel(row.comparisonChannel)}</td>
+  <td>${formatOptionalCents(row.comparisonUnitCents)}</td>
+  <td>${formatOptionalCents(row.comparisonDeltaCents)}</td>
+  <td>${formatOptionalCents(row.potentialSavingsCents)}</td>
   <td>${renderHtmlPrice(row.prices.warehouse)}</td>
   <td>${renderHtmlPrice(row.prices.receiptHistory)}</td>
   <td>${renderHtmlPrice(row.prices.warehouseSavings)}</td>
@@ -341,6 +366,36 @@ function renderHtmlRow(row: FullReportRow): string {
   <td class="${row.status === 'candidate' ? 'candidate' : row.status === 'estimated_opportunity' ? 'estimated' : ''}">${escapeHtml(row.status)}</td>
   <td>${row.status === 'estimated_opportunity' ? 'Manual warehouse verification required — ' : ''}${escapeHtml(row.reason ?? '')}</td>
 </tr>`;
+}
+
+function comparisonChannelLabel(
+  channel: 'warehouse' | 'costco_com' | 'same_day',
+): string {
+  switch (channel) {
+    case 'warehouse':
+      return 'Warehouse';
+    case 'costco_com':
+      return 'Costco.com';
+    case 'same_day':
+      return 'Same-Day estimate';
+  }
+}
+
+function reportCoverage(report: FullRunReport): {
+  readonly costcoCom: number;
+  readonly warehouse: number;
+} {
+  return report.rows.reduce(
+    (coverage, row) => {
+      if (row.purchase.purchaseChannel === 'warehouse') {
+        coverage.warehouse += 1;
+      } else {
+        coverage.costcoCom += 1;
+      }
+      return coverage;
+    },
+    { costcoCom: 0, warehouse: 0 },
+  );
 }
 
 function renderSameDayEstimate(row: FullReportRow): string {
@@ -411,6 +466,9 @@ export const REPORT_PRICE_CHANNELS: readonly PriceChannel[] = [
 ];
 
 function validateReport(report: FullRunReport): void {
+  if (report.schemaVersion !== 2) {
+    throw new TypeError('Full report schema version 2 is required.');
+  }
   const expectedChannels: ReadonlyArray<
     readonly [keyof ReportPriceChannels, PriceChannel]
   > = [
@@ -429,29 +487,165 @@ function validateReport(report: FullRunReport): void {
         );
       }
     }
+    if (row.purchase.purchaseChannel === 'costco_com') {
+      validateOnlineRow(row);
+    } else if (row.purchase.purchaseChannel === 'warehouse') {
+      validateWarehouseRow(row);
+    } else {
+      throw new TypeError('A report row has an invalid purchase channel.');
+    }
+  }
+}
+
+function validateOnlineRow(row: FullReportRow): void {
+  for (const price of [
+    row.prices.warehouse,
+    row.prices.receiptHistory,
+    row.prices.warehouseSavings,
+    row.prices.sameDay,
+  ]) {
     if (
-      row.status === 'candidate' &&
-      (row.prices.warehouse.unitPriceCents === null ||
-        row.prices.warehouse.unavailableReason !== null ||
-        row.prices.warehouse.source === null ||
-        row.prices.warehouse.observedAt === null ||
-        row.warehouseDeltaCents === null ||
-        row.warehouseDeltaCents <= 0)
+      price.unitPriceCents !== null ||
+      price.unavailableReason !== 'not_applicable'
     ) {
       throw new TypeError(
-        'A candidate requires a verified current warehouse price and positive warehouse delta.',
+        'Costco.com report evidence outside the Costco.com channel must be not_applicable.',
       );
     }
+  }
+  if (usableExactPrice(row.prices.costcoCom, 'costco_com')) {
+    validateComparison(row, 'costco_com', row.prices.costcoCom.unitPriceCents);
+  } else {
+    validateUnavailableComparison(row, 'Costco.com');
+  }
+  if (
+    row.status === 'candidate' &&
+    (row.comparisonChannel !== 'costco_com' ||
+      row.comparisonDeltaCents === null ||
+      row.comparisonDeltaCents <= 0)
+  ) {
+    throw new TypeError(
+      'A Costco.com candidate requires an exact lower Costco.com comparison.',
+    );
+  }
+  if (row.status === 'estimated_opportunity') {
+    throw new TypeError(
+      'A Costco.com purchase cannot be a Same-Day estimated opportunity.',
+    );
+  }
+}
+
+function validateWarehouseRow(row: FullReportRow): void {
+  if (usableExactPrice(row.prices.warehouse, 'warehouse')) {
+    validateComparison(row, 'warehouse', row.prices.warehouse.unitPriceCents);
+  } else if (row.status === 'estimated_opportunity') {
     if (
-      row.status === 'estimated_opportunity' &&
-      (row.prices.warehouse.unitPriceCents !== null ||
-        row.sameDayWarehouseEstimateCents === null ||
-        row.sameDayEstimatedDeltaCents === null ||
-        row.sameDayEstimatedDeltaCents <= 0)
+      !usableExactPrice(row.prices.sameDay, 'same_day') ||
+      row.sameDayWarehouseEstimateCents === null ||
+      row.sameDayEstimatedDeltaCents === null ||
+      row.sameDayEstimatedDeltaCents <= 0
     ) {
       throw new TypeError(
         'An estimated opportunity requires no verified warehouse price and a positive Same-Day estimated delta.',
       );
     }
+    validateComparison(row, 'same_day', row.sameDayWarehouseEstimateCents);
+    if (row.comparisonDeltaCents !== row.sameDayEstimatedDeltaCents) {
+      throw new TypeError(
+        'A Same-Day report comparison must match its estimated delta.',
+      );
+    }
+  } else {
+    validateUnavailableComparison(row, 'warehouse');
   }
+  if (
+    row.status === 'candidate' &&
+    (row.comparisonChannel !== 'warehouse' ||
+      row.comparisonDeltaCents === null ||
+      row.comparisonDeltaCents <= 0 ||
+      row.warehouseDeltaCents !== row.comparisonDeltaCents)
+  ) {
+    throw new TypeError(
+      'A warehouse candidate requires a verified current warehouse price and positive warehouse comparison delta.',
+    );
+  }
+  if (
+    row.status === 'estimated_opportunity' &&
+    row.comparisonChannel !== 'same_day'
+  ) {
+    throw new TypeError(
+      'An estimated opportunity requires a Same-Day comparison.',
+    );
+  }
+}
+
+function validateComparison(
+  row: FullReportRow,
+  expectedChannel: NonNullable<FullReportRow['comparisonChannel']>,
+  expectedUnitCents: number,
+): void {
+  const expectedDeltaCents = row.purchase.paidUnitCents - expectedUnitCents;
+  const expectedSavingsCents = Math.max(
+    0,
+    expectedDeltaCents * row.purchase.quantity,
+  );
+  if (
+    !Number.isSafeInteger(row.purchase.paidUnitCents) ||
+    row.purchase.paidUnitCents <= 0 ||
+    !Number.isSafeInteger(row.purchase.quantity) ||
+    row.purchase.quantity <= 0 ||
+    !Number.isSafeInteger(expectedDeltaCents) ||
+    !Number.isSafeInteger(expectedSavingsCents) ||
+    row.comparisonChannel !== expectedChannel ||
+    row.comparisonUnitCents !== expectedUnitCents ||
+    row.comparisonDeltaCents !== expectedDeltaCents ||
+    row.potentialSavingsCents !== expectedSavingsCents
+  ) {
+    const label =
+      expectedChannel === 'costco_com'
+        ? 'Costco.com'
+        : expectedChannel === 'warehouse'
+          ? 'warehouse'
+          : 'Same-Day';
+    throw new TypeError(
+      `The ${label} comparison fields must match the relevant current price.`,
+    );
+  }
+}
+
+function validateUnavailableComparison(
+  row: FullReportRow,
+  purchaseLabel: string,
+): void {
+  if (
+    row.comparisonChannel !== null ||
+    row.comparisonUnitCents !== null ||
+    row.comparisonDeltaCents !== null ||
+    row.potentialSavingsCents !== null
+  ) {
+    throw new TypeError(
+      `An unavailable ${purchaseLabel} comparison requires null comparison fields.`,
+    );
+  }
+}
+
+function usableExactPrice(
+  price: ReportPriceObservation,
+  channel: 'warehouse' | 'costco_com' | 'same_day',
+): price is ReportPriceObservation & {
+  readonly observedAt: string;
+  readonly source: string;
+  readonly unitPriceCents: number;
+} {
+  return (
+    price.channel === channel &&
+    price.unavailableReason === null &&
+    price.observedAt !== null &&
+    Number.isFinite(Date.parse(price.observedAt)) &&
+    price.source !== null &&
+    price.source.length > 0 &&
+    price.unitPriceCents !== null &&
+    Number.isSafeInteger(price.unitPriceCents) &&
+    price.unitPriceCents > 0
+  );
 }

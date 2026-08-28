@@ -751,11 +751,26 @@ describe('runPriceCheck', () => {
         .map(({ purchaseChannel }) => purchaseChannel),
     ).toEqual(['warehouse', 'costco_com']);
     expect(reports[0]?.rows).toHaveLength(2);
+    expect(reports[0]?.schemaVersion).toBe(2);
+    expect(
+      reports[0]?.rows.find(
+        ({ purchase }) => purchase.purchaseChannel === 'warehouse',
+      ),
+    ).toMatchObject({
+      comparisonChannel: 'warehouse',
+      comparisonDeltaCents: 100,
+      comparisonUnitCents: 799,
+      potentialSavingsCents: 200,
+    });
     expect(
       reports[0]?.rows.find(
         ({ purchase }) => purchase.purchaseChannel === 'costco_com',
       ),
     ).toMatchObject({
+      comparisonChannel: 'costco_com',
+      comparisonDeltaCents: 500,
+      comparisonUnitCents: 1_500,
+      potentialSavingsCents: 500,
       prices: {
         costcoCom: { unitPriceCents: 1_500 },
         receiptHistory: {
@@ -800,10 +815,13 @@ describe('runPriceCheck', () => {
                   sameDay: unavailableReportPrice('same_day'),
                 }
               : {
-                  warehouse: unavailableReportPrice('warehouse'),
-                  warehouseSavings: unavailableReportPrice('warehouse_savings'),
+                  warehouse: availableReportPrice('warehouse', 100),
+                  warehouseSavings: availableReportPrice(
+                    'warehouse_savings',
+                    200,
+                  ),
                   costcoCom: availableReportPrice('costco_com', 1_500),
-                  sameDay: unavailableReportPrice('same_day'),
+                  sameDay: availableReportPrice('same_day', 300),
                 },
         })),
       }),
@@ -840,9 +858,24 @@ describe('runPriceCheck', () => {
         purchase: expect.objectContaining({ purchaseChannel: 'warehouse' }),
       }),
       expect.objectContaining({
+        comparisonChannel: 'costco_com',
         prices: expect.objectContaining({
           costcoCom: expect.objectContaining({ unitPriceCents: 1_500 }),
-          warehouse: expect.objectContaining({ unitPriceCents: null }),
+          receiptHistory: expect.objectContaining({
+            unavailableReason: 'not_applicable',
+          }),
+          sameDay: expect.objectContaining({
+            unavailableReason: 'not_applicable',
+            unitPriceCents: null,
+          }),
+          warehouse: expect.objectContaining({
+            unavailableReason: 'not_applicable',
+            unitPriceCents: null,
+          }),
+          warehouseSavings: expect.objectContaining({
+            unavailableReason: 'not_applicable',
+            unitPriceCents: null,
+          }),
         }),
         purchase: expect.objectContaining({ purchaseChannel: 'costco_com' }),
       }),
@@ -897,6 +930,109 @@ describe('runPriceCheck', () => {
     expect(
       deps.database.getChannelAlertState('email', ONLINE_PURCHASE.id),
     ).toMatchObject({ lastNotifiedPriceCents: 1_500 });
+    deps.database.close();
+  });
+
+  it('reports below-threshold Costco.com savings without creating a candidate', async () => {
+    const reports: FullRunReport[] = [];
+    const deps = dependencies({
+      config: { ...DEFAULT_CONFIG, minimumSavingsCents: 10 },
+      fetchEvidence: async (requests) => ({
+        diagnostics: [],
+        items: requests.map((request) => ({
+          ...request,
+          prices: {
+            warehouse: unavailableReportPrice('warehouse'),
+            warehouseSavings: unavailableReportPrice('warehouse_savings'),
+            costcoCom: availableReportPrice('costco_com', 1_995),
+            sameDay: unavailableReportPrice('same_day'),
+          },
+        })),
+      }),
+      fetchOnlineOrders: async () => ({
+        diagnostic: {
+          channel: null,
+          message: 'Costco.com order import completed with 1 purchase.',
+          observedAt: NOW.toISOString(),
+          source: 'costco_online_orders',
+          status: 'ok',
+        },
+        failedDetailBatches: 0,
+        purchases: [ONLINE_PURCHASE],
+      }),
+      fetchReceipts: async () => [],
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/below-threshold.html',
+          csvFile: '/reports/below-threshold.csv',
+          jsonFile: '/reports/below-threshold.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary.candidatesFound).toBe(0);
+    expect(reports[0]?.rows[0]).toMatchObject({
+      comparisonChannel: 'costco_com',
+      comparisonDeltaCents: 5,
+      comparisonUnitCents: 1_995,
+      potentialSavingsCents: 5,
+      reason: 'below_savings_threshold',
+      status: 'not_eligible',
+    });
+    deps.database.close();
+  });
+
+  it('reports a valid Costco.com price that is not lower with zero potential savings', async () => {
+    const reports: FullRunReport[] = [];
+    const deps = dependencies({
+      fetchEvidence: async (requests) => ({
+        diagnostics: [],
+        items: requests.map((request) => ({
+          ...request,
+          prices: {
+            warehouse: unavailableReportPrice('warehouse'),
+            warehouseSavings: unavailableReportPrice('warehouse_savings'),
+            costcoCom: availableReportPrice('costco_com', 2_100),
+            sameDay: unavailableReportPrice('same_day'),
+          },
+        })),
+      }),
+      fetchOnlineOrders: async () => ({
+        diagnostic: {
+          channel: null,
+          message: 'Costco.com order import completed with 1 purchase.',
+          observedAt: NOW.toISOString(),
+          source: 'costco_online_orders',
+          status: 'ok',
+        },
+        failedDetailBatches: 0,
+        purchases: [ONLINE_PURCHASE],
+      }),
+      fetchReceipts: async () => [],
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/not-lower.html',
+          csvFile: '/reports/not-lower.csv',
+          jsonFile: '/reports/not-lower.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary.candidatesFound).toBe(0);
+    expect(reports[0]?.rows[0]).toMatchObject({
+      comparisonChannel: 'costco_com',
+      comparisonDeltaCents: -100,
+      comparisonUnitCents: 2_100,
+      potentialSavingsCents: 0,
+      reason: 'no_price_drop',
+      status: 'not_eligible',
+    });
     deps.database.close();
   });
 
@@ -1324,6 +1460,10 @@ describe('runPriceCheck', () => {
       });
       expect(reports[0]?.rows).toEqual([
         expect.objectContaining({
+          comparisonChannel: null,
+          comparisonDeltaCents: null,
+          comparisonUnitCents: null,
+          potentialSavingsCents: null,
           reason: 'costco_com_price_unavailable',
           status: 'not_eligible',
         }),
@@ -1331,6 +1471,47 @@ describe('runPriceCheck', () => {
       deps.database.close();
     },
   );
+
+  it('leaves malformed warehouse evidence unavailable instead of using Costco.com evidence', async () => {
+    const reports: FullRunReport[] = [];
+    const deps = dependencies({
+      fetchEvidence: async (requests) => ({
+        diagnostics: [],
+        items: requests.map((request) => ({
+          ...request,
+          prices: {
+            warehouse: {
+              ...availableReportPrice('warehouse', 799),
+              source: null,
+            },
+            warehouseSavings: unavailableReportPrice('warehouse_savings'),
+            costcoCom: availableReportPrice('costco_com', 100),
+            sameDay: unavailableReportPrice('same_day'),
+          },
+        })),
+      }),
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/malformed-warehouse.html',
+          csvFile: '/reports/malformed-warehouse.csv',
+          jsonFile: '/reports/malformed-warehouse.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary.candidatesFound).toBe(0);
+    expect(reports[0]?.rows[0]).toMatchObject({
+      comparisonChannel: null,
+      comparisonDeltaCents: null,
+      comparisonUnitCents: null,
+      potentialSavingsCents: null,
+      status: 'not_eligible',
+    });
+    deps.database.close();
+  });
 
   it('writes a full all-line report with separated live channels and historical receipt evidence', async () => {
     const reports: FullRunReport[] = [];
@@ -1425,6 +1606,10 @@ describe('runPriceCheck', () => {
     expect(reports).toHaveLength(1);
     expect(reports[0]?.rows).toHaveLength(2);
     expect(reports[0]?.rows[0]).toMatchObject({
+      comparisonChannel: 'warehouse',
+      comparisonDeltaCents: 150,
+      comparisonUnitCents: 749,
+      potentialSavingsCents: 300,
       purchase: { grossUnitCents: 999, paidUnitCents: 899 },
       prices: {
         receiptHistory: {
@@ -1542,6 +1727,10 @@ describe('runPriceCheck', () => {
     expect(deps.localNotifier.messages[0]?.body).toMatch(/verify/i);
     expect(deps.mailNotifier.messages[0]?.text).toMatch(/estimated/i);
     expect(reports[0]?.rows[0]).toMatchObject({
+      comparisonChannel: 'same_day',
+      comparisonDeltaCents: 106,
+      comparisonUnitCents: 793,
+      potentialSavingsCents: 212,
       sameDayWarehouseEstimateCents: 793,
       sameDayMarkupPercent: 13.5,
       sameDayEstimatedDeltaCents: 106,

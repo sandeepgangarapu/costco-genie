@@ -50,6 +50,10 @@ export interface ReportPriceChannels {
 export interface FullReportRow {
   readonly purchase: Purchase;
   readonly prices: ReportPriceChannels;
+  readonly comparisonChannel: ComparisonChannel | null;
+  readonly comparisonUnitCents: number | null;
+  readonly comparisonDeltaCents: number | null;
+  readonly potentialSavingsCents: number | null;
   readonly sameDayWarehouseEstimateCents: number | null;
   readonly sameDayMarkupPercent: number;
   readonly sameDayEstimatedDeltaCents: number | null;
@@ -71,7 +75,7 @@ export type RunOutcome =
   'success' | 'partial_failure' | 'failure' | 'auth_required' | 'skipped';
 
 export interface FullRunReport {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly startedAt: string;
   readonly finishedAt: string;
   readonly outcome: RunOutcome;

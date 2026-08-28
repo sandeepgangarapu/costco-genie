@@ -38,7 +38,7 @@ afterEach(() => {
 describe('writeFullReport', () => {
   it('writes equivalent timestamped JSON, CSV, and self-contained HTML with every price channel', async () => {
     const paths = appPaths(createTemporaryHome());
-    const report = sampleReport();
+    const report = mixedReport();
 
     const files = await writeFullReport(paths, report);
 
@@ -50,22 +50,52 @@ describe('writeFullReport', () => {
     expect(json).toEqual(report);
 
     const csv = readFileSync(files.csvFile, 'utf8');
-    expect(csv).toContain(
-      'record_type,item_number,item_name,warehouse_number,purchased_at,quantity,gross_unit_price,receipt_discount_total,net_paid_unit_price,current_warehouse_price,warehouse_source,warehouse_observed_at,warehouse_unavailable_reason,historical_receipt_price,historical_receipt_source,historical_receipt_observed_at,historical_receipt_unavailable_reason,warehouse_savings_price,warehouse_savings_promotion,warehouse_savings_source,warehouse_savings_observed_at,warehouse_savings_unavailable_reason,costco_com_price,costco_com_source,costco_com_observed_at,costco_com_unavailable_reason,same_day_price,same_day_source,same_day_observed_at,same_day_unavailable_reason,same_day_estimated_warehouse_price,same_day_markup_percent,same_day_estimated_delta,warehouse_delta,days_remaining,status,reason,run_started_at,run_finished_at,run_outcome,run_diagnostic,source_diagnostic_channel,source_diagnostic_source,source_diagnostic_status,source_diagnostic_observed_at,source_diagnostic_message',
+    const [csvHeader = ''] = csv.split('\n');
+    expect(csvHeader.split(',')).toEqual(
+      expect.arrayContaining([
+        'purchase_channel',
+        'receipt_or_order',
+        'comparison_channel',
+        'comparison_price',
+        'unit_delta',
+        'potential_savings',
+        'warehouse_purchase_lines',
+        'online_purchase_lines',
+      ]),
     );
     expect(csv).toContain(
       'purchase,1207907,"Kirkland, Premium ""Paper""",110,2026-08-14T18:02:03Z,2,$16.99,$2.00,$15.99,$14.99,verified_warehouse_api,2026-08-21T15:00:00Z,,$15.99,receipt_history,2026-08-14T18:02:03Z,,$14.49,"Save $3, warehouse only",warehouse_savings_page',
+    );
+    expect(csv).toContain(
+      'costco_com,costco.com:order-fixture-2,costco_com,$16.99,$3.00,$9.00',
     );
 
     const html = readFileSync(files.htmlFile, 'utf8');
     expect(html).toContain('<!doctype html>');
     expect(html).toContain('<caption>Purchase-line price comparison</caption>');
     expect(html).not.toContain('Unique item summary');
-    expect(html).not.toContain('1 purchase line — Warehouse:');
+    expect(html).toContain('<strong>Warehouse purchase lines:</strong> 1');
+    expect(html).toContain('<strong>Costco.com purchase lines:</strong> 1');
+    expect(html).toContain('Purchase channel');
+    expect(html).toContain('Receipt / order');
+    expect(html).toContain('Comparison channel');
+    expect(html).toContain('Comparison price');
+    expect(html).toContain('Unit delta');
+    expect(html).toContain('Potential savings');
     expect(html).toContain('Warehouse Savings');
     expect(html).toContain('Costco.com');
     expect(html).toContain('Same-Day');
     expect(html).toContain('Kirkland, Premium &quot;Paper&quot;');
+    const onlineRow = htmlRowForItem(html, '200001');
+    expect(onlineRow).toContain('<td>Costco.com</td>');
+    expect(onlineRow).not.toContain('Warehouse 847');
+    expect(onlineRow.match(/not_applicable/gu)).toHaveLength(4);
+    expect(onlineRow).toContain('<td>$16.99</td>');
+    expect(onlineRow).toContain('<td>$3.00</td>');
+    expect(onlineRow).toContain('<td>$9.00</td>');
+    const warehouseRow = htmlRowForItem(html, '1207907');
+    expect(warehouseRow).toContain('<td>Warehouse</td>');
+    expect(warehouseRow).toContain('Warehouse 110');
     expect(html).not.toMatch(/<script|<link[^>]+href=/i);
     expect(html.match(/<\/html>/gu)).toHaveLength(1);
 
@@ -98,6 +128,10 @@ describe('writeFullReport', () => {
       rows: [
         {
           ...row,
+          comparisonChannel: null,
+          comparisonUnitCents: null,
+          comparisonDeltaCents: null,
+          potentialSavingsCents: null,
           warehouseDeltaCents: null,
           status: 'not_eligible',
           reason: 'not_warehouse_price',
@@ -132,6 +166,10 @@ describe('writeFullReport', () => {
       rows: [
         {
           ...originalRow,
+          comparisonChannel: 'same_day',
+          comparisonUnitCents: 1_349,
+          comparisonDeltaCents: 250,
+          potentialSavingsCents: 500,
           sameDayWarehouseEstimateCents: 1_349,
           sameDayMarkupPercent: 13.5,
           sameDayEstimatedDeltaCents: 250,
@@ -174,10 +212,71 @@ describe('writeFullReport', () => {
       costcoCom: unavailablePrice('costco_com', 'not_available'),
       sameDay: unavailablePrice('same_day', 'not_available'),
     });
+    const originalRow = original.rows[0];
+    if (!originalRow) throw new Error('fixture row missing');
 
-    await expect(writeFullReport(paths, original)).rejects.toThrow(
-      /candidate.*current warehouse/i,
-    );
+    await expect(
+      writeFullReport(paths, {
+        ...original,
+        rows: [
+          {
+            ...originalRow,
+            comparisonChannel: null,
+            comparisonUnitCents: null,
+            comparisonDeltaCents: null,
+            potentialSavingsCents: null,
+          },
+        ],
+      }),
+    ).rejects.toThrow(/candidate.*current warehouse/i);
+  });
+
+  it('accepts an online candidate only with an exact lower Costco.com comparison', async () => {
+    const paths = appPaths(createTemporaryHome());
+    const report = mixedReport();
+    const onlineRow = report.rows[1];
+    if (!onlineRow) throw new Error('online fixture row missing');
+
+    await expect(
+      writeFullReport(paths, { ...report, rows: [onlineRow] }),
+    ).resolves.toBeDefined();
+  });
+
+  it('rejects a cross-channel online candidate comparison', async () => {
+    const paths = appPaths(createTemporaryHome());
+    const report = mixedReport();
+    const onlineRow = report.rows[1];
+    if (!onlineRow) throw new Error('online fixture row missing');
+
+    await expect(
+      writeFullReport(paths, {
+        ...report,
+        rows: [{ ...onlineRow, comparisonChannel: 'warehouse' }],
+      }),
+    ).rejects.toThrow(/Costco\.com.*comparison/i);
+  });
+
+  it('rejects a Costco.com comparison for a warehouse purchase', async () => {
+    const paths = appPaths(createTemporaryHome());
+    const report = sampleReport();
+    const row = report.rows[0];
+    if (!row) throw new Error('warehouse fixture row missing');
+
+    await expect(
+      writeFullReport(paths, {
+        ...report,
+        rows: [{ ...row, comparisonChannel: 'costco_com' }],
+      }),
+    ).rejects.toThrow(/warehouse.*comparison/i);
+  });
+
+  it('rejects obsolete report schema versions', async () => {
+    const paths = appPaths(createTemporaryHome());
+    const report = sampleReport();
+
+    await expect(
+      writeFullReport(paths, { ...report, schemaVersion: 1 as 2 }),
+    ).rejects.toThrow(/schema version 2/i);
   });
 
   it('renders savings-only evidence when an advertised final price is unavailable', async () => {
@@ -268,7 +367,7 @@ describe('writeFullReport', () => {
         readFileSync(join(paths.reportsDir, 'latest-manifest.json'), 'utf8'),
       ),
     ).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       startedAt: second.startedAt,
       files: {
         html: '2026-08-22T08-09-10-011Z.html',
@@ -312,7 +411,7 @@ describe('writeFullReport', () => {
   it('writes an empty auth-required report with diagnostics', async () => {
     const paths = appPaths(createTemporaryHome());
     const report: FullRunReport = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       startedAt: '2026-08-21T16:20:30.456Z',
       finishedAt: '2026-08-21T16:20:31.000Z',
       outcome: 'auth_required',
@@ -341,7 +440,7 @@ describe('writeFullReport', () => {
     expect(csvLines[2]).toContain('costco_orders,error');
     expect(csvLines[2]).toContain('Authentication required');
     expect(new Set(csvLines.map((line) => line.split(',').length))).toEqual(
-      new Set([46]),
+      new Set([csvLines[0]?.split(',').length]),
     );
     const html = readFileSync(files.htmlFile, 'utf8');
     expect(html).toContain('Authentication required');
@@ -364,8 +463,13 @@ function sampleReport(
       grossUnitCents: 1_699,
       couponCents: 200,
       paidUnitCents: 1_599,
+      purchaseChannel: 'warehouse',
     },
     prices,
+    comparisonChannel: 'warehouse',
+    comparisonUnitCents: 1_499,
+    comparisonDeltaCents: 100,
+    potentialSavingsCents: 200,
     sameDayWarehouseEstimateCents: null,
     sameDayMarkupPercent: 13.5,
     sameDayEstimatedDeltaCents: null,
@@ -376,7 +480,7 @@ function sampleReport(
   };
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     startedAt: '2026-08-21T16:20:30.456Z',
     finishedAt: '2026-08-21T16:21:00.000Z',
     outcome: 'partial_failure',
@@ -392,6 +496,51 @@ function sampleReport(
       },
     ],
   };
+}
+
+function mixedReport(): FullRunReport {
+  const warehouseReport = sampleReport();
+  const onlineRow: FullReportRow = {
+    purchase: {
+      couponCents: 0,
+      description: 'Costco.com Coffee',
+      grossUnitCents: 1_999,
+      id: 'online-purchase-fixture-2',
+      itemNumber: '200001',
+      paidUnitCents: 1_999,
+      purchaseChannel: 'costco_com',
+      purchasedAt: '2026-08-15T12:00:00Z',
+      quantity: 3,
+      receiptId: 'costco.com:order-fixture-2',
+      warehouseNumber: '847',
+    },
+    prices: {
+      warehouse: unavailablePrice('warehouse', 'not_applicable'),
+      receiptHistory: unavailablePrice('receipt_history', 'not_applicable'),
+      warehouseSavings: unavailablePrice('warehouse_savings', 'not_applicable'),
+      costcoCom: availablePrice('costco_com', 1_699, 'costco_product_api'),
+      sameDay: unavailablePrice('same_day', 'not_applicable'),
+    },
+    comparisonChannel: 'costco_com',
+    comparisonUnitCents: 1_699,
+    comparisonDeltaCents: 300,
+    potentialSavingsCents: 900,
+    sameDayWarehouseEstimateCents: null,
+    sameDayMarkupPercent: 13.5,
+    sameDayEstimatedDeltaCents: null,
+    warehouseDeltaCents: null,
+    daysRemaining: 17,
+    status: 'candidate',
+    reason: null,
+  };
+  return { ...warehouseReport, rows: [...warehouseReport.rows, onlineRow] };
+}
+
+function htmlRowForItem(html: string, itemNumber: string): string {
+  const rows = html.match(/<tr>[\s\S]*?<\/tr>/gu) ?? [];
+  const row = rows.find((candidate) => candidate.includes(`>${itemNumber}<`));
+  if (!row) throw new Error(`HTML row missing for ${itemNumber}`);
+  return row;
 }
 
 function samplePriceChannels(): ReportPriceChannels {
