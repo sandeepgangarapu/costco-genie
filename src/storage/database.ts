@@ -251,10 +251,12 @@ export class Database {
     `);
     const upsert = this.sqlite.transaction((items: readonly Purchase[]) => {
       for (const purchase of items) {
+        const purchaseChannel = parsePurchaseChannel(purchase.purchaseChannel);
         statement.run({
           ...purchase,
           description: purchase.description ?? null,
           grossUnitCents: purchase.grossUnitCents ?? null,
+          purchaseChannel,
         });
       }
     });
@@ -504,7 +506,10 @@ function toPurchase(row: PurchaseRow): Purchase {
 }
 
 function parsePurchaseChannel(value: unknown): PurchaseChannel {
-  return value === 'costco_com' ? 'costco_com' : 'warehouse';
+  if (value === 'warehouse' || value === 'costco_com') {
+    return value;
+  }
+  throw new TypeError('Invalid purchase channel.');
 }
 
 function toPriceObservation(row: ObservationRow): PriceObservation {

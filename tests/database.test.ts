@@ -155,6 +155,20 @@ describe('Database', () => {
     database.close();
   });
 
+  it('rejects unsupported purchase channels at the write boundary', () => {
+    const database = createDatabase();
+    const invalidPurchase = {
+      ...purchase,
+      purchaseChannel: 'invalid',
+    } as unknown as Purchase;
+
+    expect(() => database.upsertPurchases([invalidPurchase])).toThrow(
+      /invalid purchase channel/i,
+    );
+    expect(database.recentPurchases('2026-08-01T00:00:00.000Z')).toEqual([]);
+    database.close();
+  });
+
   it('migrates legacy purchase rows to warehouse and reads them from legacy read-only databases', () => {
     const directory = createTemporaryDirectory();
     const path = join(directory, 'legacy.sqlite');
@@ -192,7 +206,7 @@ describe('Database', () => {
     database.close();
   });
 
-  it('fails closed to warehouse for a corrupt persisted purchase channel', () => {
+  it('rejects a corrupt persisted purchase channel', () => {
     const directory = createTemporaryDirectory();
     const path = join(directory, 'corrupt.sqlite');
     const corrupt = new Sqlite(path);
@@ -213,9 +227,8 @@ describe('Database', () => {
 
     const database = Database.openReadOnly(path);
     expect(
-      database.recentPurchases('2026-08-01T00:00:00.000Z')[0]
-        ?.purchaseChannel,
-    ).toBe('warehouse');
+      () => database.recentPurchases('2026-08-01T00:00:00.000Z'),
+    ).toThrow(/invalid purchase channel/i);
     database.close();
   });
 
