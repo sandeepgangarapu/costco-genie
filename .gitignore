@@ -9,3 +9,4 @@ node_modules/
 logs/
 browser-profile/
 .costco-price-matcher/
+.worktrees/
