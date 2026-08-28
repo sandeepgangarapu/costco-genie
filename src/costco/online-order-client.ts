@@ -224,9 +224,13 @@ export async function fetchOnlineOrderPurchases(
           'Costco online-order detail response was malformed or errored',
         );
       }
-      const requested = new Set(batch);
-      for (const order of parsed.data.data.getOrderDetails.orders) {
-        if (!requested.has(order.orderNumber)) continue;
+      const returnedOrders = parsed.data.data.getOrderDetails.orders;
+      if (!hasExactDetailCoverage(batch, returnedOrders)) {
+        throw new CostcoApiError(
+          'Costco online-order detail response coverage was inconsistent',
+        );
+      }
+      for (const order of returnedOrders) {
         purchases.push(...normalizeOrder(order));
       }
     } catch (error) {
@@ -260,7 +264,6 @@ async function fetchOrderNumbers(
   const seenPages = new Set<string>();
   let expectedTotal: number | null = null;
   let pageNumber = 1;
-  let recordsRead = 0;
 
   while (true) {
     const payload = await postGraphql(
@@ -296,31 +299,30 @@ async function fetchOrderNumbers(
     expectedTotal ??= page.totalNumberOfRecords;
 
     const pageKey = JSON.stringify(
-      page.orders.map(({ orderNumber }) => orderNumber),
+      [...new Set(page.orders.map(({ orderNumber }) => orderNumber))].sort(),
     );
     if (page.orders.length > 0 && seenPages.has(pageKey)) {
       throw paginationError();
     }
     seenPages.add(pageKey);
 
-    const previousRecordsRead = recordsRead;
-    recordsRead += page.orders.length;
-    if (recordsRead > page.totalNumberOfRecords) throw paginationError();
-    if (
-      recordsRead === previousRecordsRead &&
-      recordsRead < page.totalNumberOfRecords
-    ) {
-      throw paginationError();
-    }
-
+    const previousUniqueRecords = seenOrderNumbers.size;
     for (const order of page.orders) {
       if (seenOrderNumbers.has(order.orderNumber)) continue;
       seenOrderNumbers.add(order.orderNumber);
       orderNumbers.push(order.orderNumber);
     }
+    const uniqueRecordsRead = seenOrderNumbers.size;
+    if (
+      uniqueRecordsRead > page.totalNumberOfRecords ||
+      (uniqueRecordsRead === previousUniqueRecords &&
+        uniqueRecordsRead < page.totalNumberOfRecords)
+    ) {
+      throw paginationError();
+    }
 
     if (
-      recordsRead >= page.totalNumberOfRecords ||
+      uniqueRecordsRead >= page.totalNumberOfRecords ||
       page.orders.length < pageSize
     ) {
       return orderNumbers;
@@ -416,8 +418,7 @@ function normalizeOrder(order: z.infer<typeof detailOrderSchema>): Purchase[] {
     const fulfilled =
       shippedQuantity > 0 ||
       deliveredQuantity > 0 ||
-      (orderLine.shipment?.pickupCompletedDate !== null &&
-        orderLine.shipment?.pickupCompletedDate !== undefined) ||
+      hasPickupCompletion(orderLine.shipment?.pickupCompletedDate) ||
       isFulfilledStatus(orderLine.lineStatus);
     if (!fulfilled) return [];
 
@@ -507,6 +508,22 @@ function paginationError(): CostcoApiError {
   return new CostcoApiError('Costco online-order pagination was inconsistent');
 }
 
+function hasExactDetailCoverage(
+  requestedOrderNumbers: readonly string[],
+  returnedOrders: readonly z.infer<typeof detailOrderSchema>[],
+): boolean {
+  if (returnedOrders.length !== requestedOrderNumbers.length) return false;
+  const requested = new Set(requestedOrderNumbers);
+  const returned = new Set<string>();
+  for (const order of returnedOrders) {
+    if (!requested.has(order.orderNumber) || returned.has(order.orderNumber)) {
+      return false;
+    }
+    returned.add(order.orderNumber);
+  }
+  return returned.size === requested.size;
+}
+
 function isWhollyInactiveStatus(status: string): boolean {
   return (
     !/\bpartial(?:ly)?\b/iu.test(status) &&
@@ -515,8 +532,37 @@ function isWhollyInactiveStatus(status: string): boolean {
 }
 
 function isFulfilledStatus(status: string): boolean {
-  return /\b(?:shipped|delivered|picked[ -]?up|pickup completed)\b/iu.test(
-    status,
+  const normalized = status
+    .trim()
+    .toLowerCase()
+    .replace(/[-_]+/gu, ' ')
+    .replace(/\s+/gu, ' ');
+  return new Set([
+    'delivered',
+    'partially delivered',
+    'partially shipped',
+    'picked up',
+    'pickup completed',
+    'shipped',
+  ]).has(normalized);
+}
+
+function hasPickupCompletion(value: string | null | undefined): boolean {
+  if (value === null || value === undefined) return false;
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})?)?$/u.exec(
+      value,
+    );
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const calendarDate = new Date(Date.UTC(year, month - 1, day));
+  return (
+    calendarDate.getUTCFullYear() === year &&
+    calendarDate.getUTCMonth() === month - 1 &&
+    calendarDate.getUTCDate() === day &&
+    !Number.isNaN(Date.parse(value))
   );
 }
 
@@ -537,6 +583,7 @@ function hasAuthenticationError(payload: unknown): boolean {
     return false;
   }
   return payload.errors.some((error) => {
+    if (hasStructuredAuthenticationStatus(error)) return true;
     try {
       return /auth|unauthori[sz]ed|forbidden|token|session|jwt/iu.test(
         JSON.stringify(error) ?? '',
@@ -544,5 +591,29 @@ function hasAuthenticationError(payload: unknown): boolean {
     } catch {
       return false;
     }
+  });
+}
+
+function hasStructuredAuthenticationStatus(
+  value: unknown,
+  seen = new WeakSet<object>(),
+): boolean {
+  if (typeof value !== 'object' || value === null || seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) =>
+      hasStructuredAuthenticationStatus(entry, seen),
+    );
+  }
+  return Object.entries(value).some(([key, entry]) => {
+    if (
+      /^(?:code|status|statuscode)$/iu.test(key) &&
+      (entry === 401 || entry === 403 || entry === '401' || entry === '403')
+    ) {
+      return true;
+    }
+    return hasStructuredAuthenticationStatus(entry, seen);
   });
 }

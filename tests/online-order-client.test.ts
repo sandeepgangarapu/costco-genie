@@ -329,6 +329,98 @@ describe('fetchOnlineOrderPurchases', () => {
     );
   });
 
+  it('requires exact affirmative fulfillment or a real pickup-completion date', async () => {
+    const order = listOrder(1);
+    const statusQuantities = {
+      cancelled: 0,
+      delivered: 0,
+      returned: 0,
+      shipped: 0,
+    };
+    const result = await fetchOnlineOrderPurchases(tokens, startDate, endDate, {
+      fetchFn: successfulFetch(
+        [order],
+        [
+          detailOrder(order.orderNumber, [
+            line({
+              itemNumber: '100101',
+              lineId: 'not-shipped',
+              lineStatus: 'Not shipped',
+              shipment: { pickupCompletedDate: null },
+              statusQuantities,
+            }),
+            line({
+              itemNumber: '100102',
+              lineId: 'not-picked-up',
+              lineStatus: 'Not picked up',
+              shipment: { pickupCompletedDate: null },
+              statusQuantities,
+            }),
+            line({
+              itemNumber: '100103',
+              lineId: 'invalid-pickup-text',
+              lineStatus: 'Processing',
+              shipment: { pickupCompletedDate: 'pending' },
+              statusQuantities,
+            }),
+            line({
+              itemNumber: '100104',
+              lineId: 'invalid-pickup-date',
+              lineStatus: 'Processing',
+              shipment: { pickupCompletedDate: '2026-99-99' },
+              statusQuantities,
+            }),
+            line({
+              itemNumber: '100105',
+              lineId: 'exact-shipped',
+              lineStatus: '  SHIPPED  ',
+              shipment: { pickupCompletedDate: null },
+              statusQuantities,
+            }),
+            line({
+              itemNumber: '100106',
+              lineId: 'exact-delivered',
+              lineStatus: 'Delivered',
+              shipment: { pickupCompletedDate: null },
+              statusQuantities,
+            }),
+            line({
+              itemNumber: '100107',
+              lineId: 'exact-pickup-completed',
+              lineStatus: 'Pickup completed',
+              shipment: { pickupCompletedDate: null },
+              statusQuantities,
+            }),
+            line({
+              itemNumber: '100108',
+              lineId: 'valid-pickup-date',
+              lineStatus: 'Processing',
+              shipment: { pickupCompletedDate: '2026-08-02' },
+              statusQuantities,
+            }),
+            line({
+              itemNumber: '100109',
+              lineId: 'valid-pickup-timestamp',
+              lineStatus: 'Processing',
+              shipment: {
+                pickupCompletedDate: '2026-08-02T10:00:00.000Z',
+              },
+              statusQuantities,
+            }),
+          ]),
+        ],
+      ),
+    });
+
+    expect(result.purchases.map(({ itemNumber }) => itemNumber)).toEqual([
+      '100105',
+      '100106',
+      '100107',
+      '100108',
+      '100109',
+    ]);
+  });
+
   it('filters fees and wholly cancelled or returned lines while retaining partial quantities', async () => {
     const order = listOrder(1);
     const lines = [
@@ -537,6 +629,44 @@ describe('fetchOnlineOrderPurchases', () => {
     ).rejects.toBeInstanceOf(AuthRequiredError);
   });
 
+  it('maps a structured list error status to AuthRequiredError', async () => {
+    const fetchFn: typeof fetch = async () =>
+      Response.json({
+        errors: [
+          {
+            extensions: { status: 401 },
+            message: 'Request could not be completed',
+          },
+        ],
+      });
+
+    await expect(
+      fetchOnlineOrderPurchases(tokens, startDate, endDate, { fetchFn }),
+    ).rejects.toBeInstanceOf(AuthRequiredError);
+  });
+
+  it('maps a structured detail error code to AuthRequiredError', async () => {
+    const order = listOrder(1);
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = bodyOf(init);
+      if (body.operationName === 'GetOnlineOrders') {
+        return listResponse([order]);
+      }
+      return Response.json({
+        errors: [
+          {
+            extensions: { code: '403' },
+            message: 'Request could not be completed',
+          },
+        ],
+      });
+    };
+
+    await expect(
+      fetchOnlineOrderPurchases(tokens, startDate, endDate, { fetchFn }),
+    ).rejects.toBeInstanceOf(AuthRequiredError);
+  });
+
   it.each([
     {
       name: 'timeout',
@@ -589,6 +719,62 @@ describe('fetchOnlineOrderPurchases', () => {
     expect(error).toBeInstanceOf(CostcoApiError);
     const message = error instanceof Error ? error.message : '';
     expect(message.includes(firstPage[0]?.orderNumber ?? '')).toBe(false);
+  });
+
+  it('rejects a reordered duplicate page before total coverage is reached', async () => {
+    const repeated = [listOrder(1), listOrder(2), listOrder(3)];
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = bodyOf(init);
+      const pageNumber = Number(body.variables.pageNumber);
+      return listResponse(
+        pageNumber === 1 ? repeated : [...repeated].reverse(),
+        6,
+        pageNumber,
+        3,
+      );
+    };
+
+    await expect(
+      fetchOnlineOrderPurchases(tokens, startDate, endDate, {
+        fetchFn,
+        pageSize: 3,
+      }),
+    ).rejects.toBeInstanceOf(CostcoApiError);
+  });
+
+  it('uses verified unique coverage when adjacent pages overlap but advance', async () => {
+    const orders = Array.from({ length: 5 }, (_, index) =>
+      listOrder(index + 1),
+    );
+    const bodies: GraphqlBody[] = [];
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = bodyOf(init);
+      bodies.push(body);
+      if (body.operationName === 'GetOnlineOrders') {
+        const pageNumber = Number(body.variables.pageNumber);
+        return listResponse(
+          pageNumber === 1
+            ? orders.slice(0, 3)
+            : [orders[2], orders[3], orders[4]],
+          5,
+          pageNumber,
+          3,
+        );
+      }
+      return detailResponse(
+        orders.map((value) => detailOrder(value.orderNumber)),
+      );
+    };
+
+    const result = await fetchOnlineOrderPurchases(tokens, startDate, endDate, {
+      fetchFn,
+      pageSize: 3,
+    });
+
+    expect(result.purchases).toHaveLength(5);
+    expect(
+      bodies.filter(({ operationName }) => operationName === 'GetOnlineOrders'),
+    ).toHaveLength(2);
   });
 
   it('rejects missing order numbers as a sanitized pagination error', async () => {
@@ -649,6 +835,45 @@ describe('fetchOnlineOrderPurchases', () => {
       'Costco.com order import completed with 1 purchase and 1 failed detail batch.',
     );
   });
+
+  it.each(['missing', 'extra', 'duplicate'] as const)(
+    'rejects a detail batch with %s order coverage and continues later batches',
+    async (coverage) => {
+      const orders = [listOrder(1), listOrder(2)];
+      let detailCalls = 0;
+      const fetchFn: typeof fetch = async (_input, init) => {
+        const body = bodyOf(init);
+        if (body.operationName === 'GetOnlineOrders') {
+          return listResponse(orders);
+        }
+        detailCalls += 1;
+        if (detailCalls === 2) {
+          return detailResponse([detailOrder(orders[1]!.orderNumber)]);
+        }
+        if (coverage === 'missing') return detailResponse([]);
+        const requested = detailOrder(orders[0]!.orderNumber);
+        return detailResponse(
+          coverage === 'extra'
+            ? [requested, detailOrder('UNREQUESTED-ORDER')]
+            : [requested, requested],
+        );
+      };
+
+      const result = await fetchOnlineOrderPurchases(
+        tokens,
+        startDate,
+        endDate,
+        { detailBatchSize: 1, fetchFn },
+      );
+
+      expect(detailCalls).toBe(2);
+      expect(result.failedDetailBatches).toBe(1);
+      expect(result.purchases.map(({ receiptId }) => receiptId)).toEqual([
+        'costco.com:TEST-0002',
+      ]);
+      expect(result.diagnostic.status).toBe('error');
+    },
+  );
 
   it.each([
     { detailBatchSize: 0 },
