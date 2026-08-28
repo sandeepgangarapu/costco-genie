@@ -12,7 +12,7 @@ const ONLINE_ORDER_ENDPOINT =
 const CLIENT_IDENTIFIER = '481b1aec-aa3b-454b-b81b-48187e28f205';
 const ONLINE_WAREHOUSE_NUMBER = '847';
 const DEFAULT_PAGE_SIZE = 10;
-const DEFAULT_DETAIL_BATCH_SIZE = 10;
+const DEFAULT_DETAIL_BATCH_SIZE = 1;
 const MAX_SAFE_BATCH_SIZE = 10;
 const DEFAULT_TIMEOUT_MILLISECONDS = 30_000;
 const SOURCE = 'costco_online_orders';
@@ -21,8 +21,8 @@ const GET_ONLINE_ORDERS_QUERY = `
   query GetOnlineOrders(
     $startDate: String!
     $endDate: String!
-    $pageNumber: Int!
-    $pageSize: Int!
+    $pageNumber: Int
+    $pageSize: Int
     $warehouseNumber: String!
   ) {
     getOnlineOrders(
@@ -32,34 +32,46 @@ const GET_ONLINE_ORDERS_QUERY = `
       pageSize: $pageSize
       warehouseNumber: $warehouseNumber
     ) {
-      orders { orderNumber orderedDate orderStatus }
       pageNumber
       pageSize
       totalNumberOfRecords
+      bcOrders {
+        orderHeaderId
+        orderPlacedDate: orderedDate
+        orderNumber: sourceOrderNumber
+        status
+      }
     }
   }
 `;
 
 const GET_ORDER_DETAILS_QUERY = `
-  query GetOrderDetails($orderNumbers: [String!]!) {
+  query GetOrderDetails($orderNumbers: [String]) {
     getOrderDetails(orderNumbers: $orderNumbers) {
-      orders {
-        orderNumber
-        orderedDate
-        orderStatus
-        orderLines {
-          lineId
-          itemNumber
-          itemDescription
-          unitPrice
-          orderedQuantity
-          merchandiseTotal
+      orderNumber: sourceOrderNumber
+      orderPlacedDate: orderedDate
+      status
+      shipToAddress: orderShipTos {
+        orderLineItems {
+          orderStatus
           isFeeItem
-          lineStatus
+          itemNumber
+          itemDescription: sourceItemDescription
+          price: unitPrice
+          quantity: orderedTotalQuantity
+          merchandiseTotalAmount
+          lineItemId
+          returnStatus
           totalReturnedQuantity
           returnableQuantity
-          statusQuantities { cancelled returned shipped delivered }
-          shipment { pickupCompletedDate }
+          itemStatus {
+            cancelled { quantity }
+            returned { quantity }
+            shipped { quantity }
+            delivered { quantity }
+            cancellationRequested { quantity }
+          }
+          shipment { pickUpCompletedDate }
         }
       }
     }
@@ -70,14 +82,15 @@ const wireScalarSchema = z.union([z.string(), z.number()]);
 const nonemptyTextSchema = z.string().trim().min(1);
 const listOrderSchema = z
   .object({
+    orderHeaderId: wireScalarSchema,
     orderNumber: nonemptyTextSchema,
-    orderedDate: nonemptyTextSchema,
-    orderStatus: z.string(),
+    orderPlacedDate: nonemptyTextSchema,
+    status: z.string(),
   })
   .strict();
 const listPageSchema = z
   .object({
-    orders: z.array(listOrderSchema),
+    bcOrders: z.array(listOrderSchema),
     pageNumber: z.number().int().positive(),
     pageSize: z.number().int().positive(),
     totalNumberOfRecords: z.number().int().nonnegative(),
@@ -87,24 +100,30 @@ const listResponseSchema = z
   .object({
     data: z
       .object({
-        getOnlineOrders: listPageSchema,
+        getOnlineOrders: z.array(listPageSchema).min(1),
       })
       .strict(),
     errors: z.array(z.unknown()).optional(),
   })
   .strict();
 
-const statusQuantitiesSchema = z
+const itemStatusQuantitySchema = z
   .object({
-    cancelled: wireScalarSchema,
-    delivered: wireScalarSchema,
-    returned: wireScalarSchema,
-    shipped: wireScalarSchema,
+    quantity: wireScalarSchema,
+  })
+  .strict();
+const itemStatusSchema = z
+  .object({
+    cancellationRequested: itemStatusQuantitySchema,
+    cancelled: itemStatusQuantitySchema,
+    delivered: itemStatusQuantitySchema,
+    returned: itemStatusQuantitySchema,
+    shipped: itemStatusQuantitySchema,
   })
   .strict();
 const shipmentSchema = z
   .object({
-    pickupCompletedDate: z.string().trim().min(1).nullable(),
+    pickUpCompletedDate: z.string().trim().min(1).nullable(),
   })
   .strict();
 const orderLineSchema = z
@@ -112,32 +131,36 @@ const orderLineSchema = z
     isFeeItem: z.boolean(),
     itemDescription: z.string().nullish(),
     itemNumber: wireScalarSchema,
-    lineId: wireScalarSchema,
-    lineStatus: z.string(),
-    merchandiseTotal: wireScalarSchema,
-    orderedQuantity: wireScalarSchema,
+    itemStatus: itemStatusSchema,
+    lineItemId: wireScalarSchema,
+    merchandiseTotalAmount: wireScalarSchema,
+    orderStatus: z.string(),
+    price: wireScalarSchema,
+    quantity: wireScalarSchema,
+    returnStatus: z.string().nullish(),
     returnableQuantity: wireScalarSchema,
     shipment: shipmentSchema.nullish(),
-    statusQuantities: statusQuantitiesSchema,
     totalReturnedQuantity: wireScalarSchema,
-    unitPrice: wireScalarSchema,
+  })
+  .strict();
+const shipToSchema = z
+  .object({
+    orderLineItems: z.array(orderLineSchema),
   })
   .strict();
 const detailOrderSchema = z
   .object({
-    orderLines: z.array(orderLineSchema),
     orderNumber: nonemptyTextSchema,
-    orderedDate: nonemptyTextSchema,
-    orderStatus: z.string(),
+    orderPlacedDate: nonemptyTextSchema,
+    shipToAddress: z.array(shipToSchema),
+    status: z.string(),
   })
   .strict();
 const detailResponseSchema = z
   .object({
     data: z
       .object({
-        getOrderDetails: z
-          .object({ orders: z.array(detailOrderSchema) })
-          .strict(),
+        getOrderDetails: detailOrderSchema,
       })
       .strict(),
     errors: z.array(z.unknown()).optional(),
@@ -181,10 +204,7 @@ export async function fetchOnlineOrderPurchases(
     options.pageSize ?? DEFAULT_PAGE_SIZE,
     'Online-order page size',
   );
-  const detailBatchSize = safeBatchSize(
-    options.detailBatchSize ?? DEFAULT_DETAIL_BATCH_SIZE,
-    'Online-order detail batch size',
-  );
+  safeDetailBatchSize(options.detailBatchSize ?? DEFAULT_DETAIL_BATCH_SIZE);
   const context: RequestContext = {
     createTimeoutSignal:
       options.createTimeoutSignal ??
@@ -203,18 +223,13 @@ export async function fetchOnlineOrderPurchases(
   const purchases: Purchase[] = [];
   let failedDetailBatches = 0;
 
-  for (
-    let offset = 0;
-    offset < orderNumbers.length;
-    offset += detailBatchSize
-  ) {
-    const batch = orderNumbers.slice(offset, offset + detailBatchSize);
+  for (const orderNumber of orderNumbers) {
     try {
       const payload = await postGraphql(
         {
           operationName: 'GetOrderDetails',
           query: GET_ORDER_DETAILS_QUERY,
-          variables: { orderNumbers: batch },
+          variables: { orderNumbers: [orderNumber] },
         },
         context,
       );
@@ -224,15 +239,13 @@ export async function fetchOnlineOrderPurchases(
           'Costco online-order detail response was malformed or errored',
         );
       }
-      const returnedOrders = parsed.data.data.getOrderDetails.orders;
-      if (!hasExactDetailCoverage(batch, returnedOrders)) {
+      const returnedOrder = parsed.data.data.getOrderDetails;
+      if (returnedOrder.orderNumber !== orderNumber) {
         throw new CostcoApiError(
           'Costco online-order detail response coverage was inconsistent',
         );
       }
-      for (const order of returnedOrders) {
-        purchases.push(...normalizeOrder(order));
-      }
+      purchases.push(...normalizeOrder(returnedOrder));
     } catch (error) {
       if (error instanceof AuthRequiredError) throw error;
       failedDetailBatches += 1;
@@ -287,11 +300,16 @@ async function fetchOrderNumbers(
       );
     }
 
-    const page = parsed.data.data.getOnlineOrders;
+    const page = parsed.data.data.getOnlineOrders[0];
+    if (page === undefined) {
+      throw new CostcoApiError(
+        'Costco online-order list response was malformed or errored',
+      );
+    }
     if (
       page.pageNumber !== pageNumber ||
       page.pageSize !== pageSize ||
-      page.orders.length > pageSize ||
+      page.bcOrders.length > pageSize ||
       (expectedTotal !== null && page.totalNumberOfRecords !== expectedTotal)
     ) {
       throw paginationError();
@@ -299,15 +317,15 @@ async function fetchOrderNumbers(
     expectedTotal ??= page.totalNumberOfRecords;
 
     const pageKey = JSON.stringify(
-      [...new Set(page.orders.map(({ orderNumber }) => orderNumber))].sort(),
+      [...new Set(page.bcOrders.map(({ orderNumber }) => orderNumber))].sort(),
     );
-    if (page.orders.length > 0 && seenPages.has(pageKey)) {
+    if (page.bcOrders.length > 0 && seenPages.has(pageKey)) {
       throw paginationError();
     }
     seenPages.add(pageKey);
 
     const previousUniqueRecords = seenOrderNumbers.size;
-    for (const order of page.orders) {
+    for (const order of page.bcOrders) {
       if (seenOrderNumbers.has(order.orderNumber)) continue;
       seenOrderNumbers.add(order.orderNumber);
       orderNumbers.push(order.orderNumber);
@@ -323,7 +341,7 @@ async function fetchOrderNumbers(
 
     if (
       uniqueRecordsRead >= page.totalNumberOfRecords ||
-      page.orders.length < pageSize
+      page.bcOrders.length < pageSize
     ) {
       return orderNumbers;
     }
@@ -376,76 +394,84 @@ async function postGraphql(
 }
 
 function normalizeOrder(order: z.infer<typeof detailOrderSchema>): Purchase[] {
-  if (isWhollyInactiveStatus(order.orderStatus)) return [];
-  return order.orderLines.flatMap((orderLine) => {
-    if (orderLine.isFeeItem || isWhollyInactiveStatus(orderLine.lineStatus)) {
-      return [];
-    }
+  if (isWhollyInactiveStatus(order.status)) return [];
+  return order.shipToAddress
+    .flatMap(({ orderLineItems }) => orderLineItems)
+    .flatMap((orderLine) => {
+      if (
+        orderLine.isFeeItem ||
+        isWhollyInactiveStatus(orderLine.orderStatus)
+      ) {
+        return [];
+      }
 
-    const itemNumber = numericIdentifier(orderLine.itemNumber);
-    const lineId = stableIdentifier(orderLine.lineId);
-    const paidUnitCents = positiveMoneyCents(orderLine.unitPrice);
-    const orderedQuantity = positiveInteger(orderLine.orderedQuantity);
-    const cancelledQuantity = nonnegativeInteger(
-      orderLine.statusQuantities.cancelled,
-    );
-    const returnedStatusQuantity = nonnegativeInteger(
-      orderLine.statusQuantities.returned,
-    );
-    const totalReturnedQuantity = nonnegativeInteger(
-      orderLine.totalReturnedQuantity,
-    );
-    const shippedQuantity = nonnegativeInteger(
-      orderLine.statusQuantities.shipped,
-    );
-    const deliveredQuantity = nonnegativeInteger(
-      orderLine.statusQuantities.delivered,
-    );
-    if (
-      itemNumber === null ||
-      lineId === null ||
-      paidUnitCents === null ||
-      orderedQuantity === null ||
-      cancelledQuantity === null ||
-      returnedStatusQuantity === null ||
-      totalReturnedQuantity === null ||
-      shippedQuantity === null ||
-      deliveredQuantity === null
-    ) {
-      return [];
-    }
+      const itemNumber = numericIdentifier(orderLine.itemNumber);
+      const lineId = stableIdentifier(orderLine.lineItemId);
+      const paidUnitCents = positiveMoneyCents(orderLine.price);
+      const orderedQuantity = positiveInteger(orderLine.quantity);
+      const cancelledQuantity = nonnegativeInteger(
+        orderLine.itemStatus.cancelled.quantity,
+      );
+      const returnedStatusQuantity = nonnegativeInteger(
+        orderLine.itemStatus.returned.quantity,
+      );
+      const totalReturnedQuantity = nonnegativeInteger(
+        orderLine.totalReturnedQuantity,
+      );
+      const shippedQuantity = nonnegativeInteger(
+        orderLine.itemStatus.shipped.quantity,
+      );
+      const deliveredQuantity = nonnegativeInteger(
+        orderLine.itemStatus.delivered.quantity,
+      );
+      if (
+        itemNumber === null ||
+        lineId === null ||
+        paidUnitCents === null ||
+        orderedQuantity === null ||
+        cancelledQuantity === null ||
+        returnedStatusQuantity === null ||
+        totalReturnedQuantity === null ||
+        shippedQuantity === null ||
+        deliveredQuantity === null
+      ) {
+        return [];
+      }
 
-    const fulfilled =
-      shippedQuantity > 0 ||
-      deliveredQuantity > 0 ||
-      hasPickupCompletion(orderLine.shipment?.pickupCompletedDate) ||
-      isFulfilledStatus(orderLine.lineStatus);
-    if (!fulfilled) return [];
+      const fulfilled =
+        shippedQuantity > 0 ||
+        deliveredQuantity > 0 ||
+        hasPickupCompletion(orderLine.shipment?.pickUpCompletedDate) ||
+        isFulfilledStatus(orderLine.orderStatus);
+      if (!fulfilled) return [];
 
-    const returned = Math.max(totalReturnedQuantity, returnedStatusQuantity);
-    const activeQuantity = Math.max(
-      0,
-      Math.min(orderedQuantity, orderedQuantity - cancelledQuantity - returned),
-    );
-    if (activeQuantity <= 0) return [];
+      const returned = Math.max(totalReturnedQuantity, returnedStatusQuantity);
+      const activeQuantity = Math.max(
+        0,
+        Math.min(
+          orderedQuantity,
+          orderedQuantity - cancelledQuantity - returned,
+        ),
+      );
+      if (activeQuantity <= 0) return [];
 
-    const description = orderLine.itemDescription?.trim();
-    return [
-      {
-        ...(description ? { description } : {}),
-        couponCents: 0,
-        grossUnitCents: paidUnitCents,
-        id: purchaseId(order.orderNumber, lineId),
-        itemNumber,
-        paidUnitCents,
-        purchaseChannel: 'costco_com',
-        purchasedAt: order.orderedDate,
-        quantity: activeQuantity,
-        receiptId: `costco.com:${order.orderNumber}`,
-        warehouseNumber: ONLINE_WAREHOUSE_NUMBER,
-      },
-    ];
-  });
+      const description = orderLine.itemDescription?.trim();
+      return [
+        {
+          ...(description ? { description } : {}),
+          couponCents: 0,
+          grossUnitCents: paidUnitCents,
+          id: purchaseId(order.orderNumber, lineId),
+          itemNumber,
+          paidUnitCents,
+          purchaseChannel: 'costco_com',
+          purchasedAt: order.orderPlacedDate,
+          quantity: activeQuantity,
+          receiptId: `costco.com:${order.orderNumber}`,
+          warehouseNumber: ONLINE_WAREHOUSE_NUMBER,
+        },
+      ];
+    });
 }
 
 function purchaseId(orderNumber: string, lineId: string): string {
@@ -492,6 +518,13 @@ function safeBatchSize(value: number, label: string): number {
   return value;
 }
 
+function safeDetailBatchSize(value: number): number {
+  if (value !== 1) {
+    throw new RangeError('Online-order detail batch size must be 1');
+  }
+  return value;
+}
+
 function diagnosticMessage(
   purchaseCount: number,
   failedDetailBatches: number,
@@ -506,22 +539,6 @@ function diagnosticMessage(
 
 function paginationError(): CostcoApiError {
   return new CostcoApiError('Costco online-order pagination was inconsistent');
-}
-
-function hasExactDetailCoverage(
-  requestedOrderNumbers: readonly string[],
-  returnedOrders: readonly z.infer<typeof detailOrderSchema>[],
-): boolean {
-  if (returnedOrders.length !== requestedOrderNumbers.length) return false;
-  const requested = new Set(requestedOrderNumbers);
-  const returned = new Set<string>();
-  for (const order of returnedOrders) {
-    if (!requested.has(order.orderNumber) || returned.has(order.orderNumber)) {
-      return false;
-    }
-    returned.add(order.orderNumber);
-  }
-  return returned.size === requested.size;
 }
 
 function isWhollyInactiveStatus(status: string): boolean {
