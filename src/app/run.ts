@@ -6,6 +6,7 @@ import { buildReportRows } from '../core/report-rows.js';
 import type { CostcoTokens } from '../costco/browser-session.js';
 import { AuthRequiredError } from '../costco/errors.js';
 import type {
+  PriceRequest,
   WarehousePriceOptions,
   WarehousePriceRequest,
   ReportPriceEvidenceResult,
@@ -75,7 +76,7 @@ export interface RunDependencies {
     options: WarehousePriceOptions,
   ) => Promise<PriceObservation[]>;
   readonly fetchReportPriceEvidence?: (
-    requests: readonly WarehousePriceRequest[],
+    requests: readonly PriceRequest[],
     options: WarehousePriceOptions,
   ) => Promise<ReportPriceEvidenceResult>;
   readonly localNotifier: LocalNotifier;
@@ -551,6 +552,7 @@ function estimatedCandidates(
     }
     return [
       {
+        comparisonChannel: 'same_day',
         currentUnitCents: row.sameDayWarehouseEstimateCents,
         daysRemaining: row.daysRemaining,
         estimated: true,
@@ -607,6 +609,7 @@ function fallbackPriceEvidence(
   return {
     items: observations.map((observation) => ({
       itemNumber: observation.itemNumber,
+      purchaseChannel: 'warehouse',
       warehouseNumber: observation.warehouseNumber,
       prices: {
         warehouse: reportWarehouseObservation(observation),
@@ -804,17 +807,19 @@ function uniquePriceRequests(
   purchases: readonly {
     description?: string;
     itemNumber: string;
+    purchaseChannel: import('../domain/types.js').PurchaseChannel;
     warehouseNumber: string;
   }[],
-): WarehousePriceRequest[] {
-  const requests = new Map<string, WarehousePriceRequest>();
+): PriceRequest[] {
+  const requests = new Map<string, PriceRequest>();
   for (const purchase of purchases) {
-    const key = `${purchase.itemNumber}\u0000${purchase.warehouseNumber}`;
+    const key = `${purchase.purchaseChannel}\u0000${purchase.itemNumber}\u0000${purchase.warehouseNumber}`;
     const description =
       purchase.description?.trim() || requests.get(key)?.description;
     requests.set(key, {
       ...(description === undefined ? {} : { description }),
       itemNumber: purchase.itemNumber,
+      purchaseChannel: purchase.purchaseChannel,
       warehouseNumber: purchase.warehouseNumber,
     });
   }

@@ -233,6 +233,7 @@ describe('createDefaultCliActions composition', () => {
       {
         description: 'Composed item',
         itemNumber: '100978861',
+        purchaseChannel: 'warehouse',
         warehouseNumber: '129',
       },
     ]);

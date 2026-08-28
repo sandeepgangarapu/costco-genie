@@ -86,7 +86,10 @@ export interface FullReportFiles {
   readonly jsonFile: string;
 }
 
+export type ComparisonChannel = 'warehouse' | 'costco_com' | 'same_day';
+
 export interface AdjustmentCandidate {
+  readonly comparisonChannel: ComparisonChannel;
   readonly purchase: Purchase;
   readonly observation: PriceObservation;
   readonly currentUnitCents: number;

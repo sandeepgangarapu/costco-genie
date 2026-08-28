@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 import type {
   PriceObservation,
+  PurchaseChannel,
+  ReportPriceChannels,
   ReportPriceObservation,
   ReportSourceDiagnostic,
 } from '../domain/types.js';
@@ -47,6 +49,10 @@ export interface WarehousePriceRequest {
   readonly warehouseNumber: string;
 }
 
+export interface PriceRequest extends WarehousePriceRequest {
+  readonly purchaseChannel: PurchaseChannel;
+}
+
 export interface WarehousePriceOptions {
   readonly batchSize?: number;
   readonly createTimeoutSignal?: (timeoutMilliseconds: number) => AbortSignal;
@@ -57,20 +63,16 @@ export interface WarehousePriceOptions {
   readonly sameDayPostalCode?: string;
   readonly sameDayRepresentativeAddress?: string;
   readonly sameDayPriceFetcher?: (
-    requests: readonly WarehousePriceRequest[],
+    requests: readonly PriceRequest[],
     options: SameDayPriceOptions,
   ) => Promise<SameDayPriceObservation[]>;
 }
 
 export interface ReportPriceEvidenceItem {
+  readonly purchaseChannel: PurchaseChannel;
   readonly itemNumber: string;
   readonly warehouseNumber: string;
-  readonly prices: {
-    readonly warehouse: ReportPriceObservation;
-    readonly warehouseSavings: ReportPriceObservation;
-    readonly costcoCom: ReportPriceObservation;
-    readonly sameDay: ReportPriceObservation;
-  };
+  readonly prices: Omit<ReportPriceChannels, 'receiptHistory'>;
 }
 
 export interface ReportPriceEvidenceResult {
@@ -171,6 +173,13 @@ function parseWirePriceToCents(value: unknown): number | null {
   return null;
 }
 
+function validatedBatchSize(configuredBatchSize: number): number {
+  if (!Number.isInteger(configuredBatchSize) || configuredBatchSize <= 0) {
+    throw new RangeError('Price batch size must be a positive integer');
+  }
+  return Math.min(configuredBatchSize, MAX_BATCH_SIZE);
+}
+
 async function fetchBatch(
   batch: readonly IndexedRequest[],
   warehouseNumber: string,
@@ -227,12 +236,7 @@ export async function fetchWarehousePrices(
   requests: readonly WarehousePriceRequest[],
   options: WarehousePriceOptions = {},
 ): Promise<PriceObservation[]> {
-  const configuredBatchSize = options.batchSize ?? MAX_BATCH_SIZE;
-  if (!Number.isInteger(configuredBatchSize) || configuredBatchSize <= 0) {
-    throw new RangeError('Price batch size must be a positive integer');
-  }
-
-  const batchSize = Math.min(configuredBatchSize, MAX_BATCH_SIZE);
+  const batchSize = validatedBatchSize(options.batchSize ?? MAX_BATCH_SIZE);
   const fetchFn = options.fetchFn ?? fetch;
   const createTimeoutSignal =
     options.createTimeoutSignal ??
@@ -289,50 +293,97 @@ export async function fetchWarehousePrices(
 }
 
 export async function fetchReportPriceEvidence(
-  requests: readonly WarehousePriceRequest[],
+  requests: readonly PriceRequest[],
   options: WarehousePriceOptions = {},
 ): Promise<ReportPriceEvidenceResult> {
+  validatedBatchSize(options.batchSize ?? MAX_BATCH_SIZE);
   const now = options.now ?? (() => new Date());
   const observed = now();
   const observedAt = observed.toISOString();
   const fetchFn = options.fetchFn ?? fetch;
-  const warehouseObservations = await fetchWarehousePrices(requests, {
-    ...options,
-    fetchFn,
-    now: () => observed,
-  });
-  const online = await fetchOnlinePrices(requests, {
-    ...options,
-    fetchFn,
-    now: () => observed,
-  });
-  const savings = await fetchSavingsPrices(
-    requests,
-    observed,
-    fetchFn,
-    (
-      options.createTimeoutSignal ??
-      ((milliseconds) => AbortSignal.timeout(milliseconds))
-    )(options.timeoutMilliseconds ?? EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS),
+  const uniqueRequests = deduplicatePriceRequests(requests);
+  const warehouseRequests = uniqueRequests.filter(
+    (request) => request.purchaseChannel === 'warehouse',
   );
-  const sameDay = await fetchSameDayEvidence(requests, options, observed);
+  const warehouseObservations =
+    warehouseRequests.length === 0
+      ? []
+      : await fetchWarehousePrices(warehouseRequests, {
+          ...options,
+          fetchFn,
+          now: () => observed,
+        });
+  const online = await fetchOnlinePrices(uniqueRequests, {
+    ...options,
+    fetchFn,
+    now: () => observed,
+  });
+  const savings =
+    warehouseRequests.length === 0
+      ? {
+          items: [],
+          diagnostic: notApplicableDiagnostic(
+            'warehouse_savings',
+            SAVINGS_SOURCE,
+            observedAt,
+          ),
+        }
+      : await fetchSavingsPrices(
+          warehouseRequests,
+          observed,
+          fetchFn,
+          (
+            options.createTimeoutSignal ??
+            ((milliseconds) => AbortSignal.timeout(milliseconds))
+          )(
+            options.timeoutMilliseconds ??
+              EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS,
+          ),
+        );
+  const sameDay =
+    warehouseRequests.length === 0
+      ? {
+          items: [],
+          diagnostic: notApplicableDiagnostic(
+            'same_day',
+            'same_day',
+            observedAt,
+          ),
+        }
+      : await fetchSameDayEvidence(warehouseRequests, options, observed);
   const warehouseByKey = new Map(
-    warehouseObservations.map((value) => [priceKey(value), value]),
+    warehouseObservations.map((value) => [sourcePriceKey(value), value]),
   );
   const onlineByKey = new Map(
-    online.items.map((value) => [priceKey(value), value]),
+    online.items.map((value) => [evidenceKey(value), value]),
   );
   const savingsByKey = new Map(
-    savings.items.map((value) => [priceKey(value), value]),
+    savings.items.map((value) => [sourcePriceKey(value), value]),
   );
   const sameDayByKey = new Map(
-    sameDay.items.map((value) => [priceKey(value), value]),
+    sameDay.items.map((value) => [sourcePriceKey(value), value]),
   );
-  const items = requests.map((request) => {
-    const key = priceKey(request);
-    const warehouse = warehouseByKey.get(key);
-    const savingsRecord = savingsByKey.get(key);
-    const onlineRecord = onlineByKey.get(key);
+  const items = uniqueRequests.map((request) => {
+    const sourceKey = sourcePriceKey(request);
+    const onlineRecord = onlineByKey.get(evidenceKey(request));
+    if (request.purchaseChannel === 'costco_com') {
+      return {
+        purchaseChannel: request.purchaseChannel,
+        itemNumber: request.itemNumber,
+        warehouseNumber: request.warehouseNumber,
+        prices: {
+          warehouse: unavailable('warehouse', 'not_applicable'),
+          warehouseSavings: unavailable('warehouse_savings', 'not_applicable'),
+          costcoCom: onlineRecord
+            ? reportPriceOnly(onlineRecord)
+            : unavailable('costco_com', 'product_not_found'),
+          sameDay: unavailable('same_day', 'not_applicable'),
+        },
+      };
+    }
+
+    const warehouse = warehouseByKey.get(sourceKey);
+    const savingsRecord = savingsByKey.get(sourceKey);
     const savingsPrice = savingsRecord
       ? reportPriceOnly(savingsRecord)
       : unavailable('warehouse_savings', 'item_not_advertised');
@@ -348,6 +399,7 @@ export async function fetchReportPriceEvidence(
           }
         : apiWarehouse;
     return {
+      purchaseChannel: request.purchaseChannel,
       itemNumber: request.itemNumber,
       warehouseNumber: request.warehouseNumber,
       prices: {
@@ -356,8 +408,8 @@ export async function fetchReportPriceEvidence(
         costcoCom: onlineRecord
           ? reportPriceOnly(onlineRecord)
           : unavailable('costco_com', 'product_not_found'),
-        sameDay: sameDayByKey.get(key)
-          ? reportPriceOnly(sameDayByKey.get(key)!)
+        sameDay: sameDayByKey.get(sourceKey)
+          ? reportPriceOnly(sameDayByKey.get(sourceKey)!)
           : unavailable('same_day', 'source_not_configured'),
       },
     };
@@ -369,13 +421,17 @@ export async function fetchReportPriceEvidence(
       diagnostic(
         'warehouse',
         SOURCE,
-        warehouseObservations.some(
-          (value) => value.unresolvedReason === 'batch_failed',
-        )
-          ? 'error'
-          : 'ok',
+        warehouseRequests.length === 0
+          ? 'unavailable'
+          : warehouseObservations.some(
+                (value) => value.unresolvedReason === 'batch_failed',
+              )
+            ? 'error'
+            : 'ok',
         observedAt,
-        'Current warehouse product lookup completed.',
+        warehouseRequests.length === 0
+          ? 'Current warehouse product lookup is not applicable.'
+          : 'Current warehouse product lookup completed.',
       ),
       online.diagnostic,
       savings.diagnostic,
@@ -385,7 +441,7 @@ export async function fetchReportPriceEvidence(
 }
 
 async function fetchSameDayEvidence(
-  requests: readonly WarehousePriceRequest[],
+  requests: readonly PriceRequest[],
   options: WarehousePriceOptions,
   observed: Date,
 ): Promise<{
@@ -456,22 +512,21 @@ async function fetchSameDayEvidence(
 }
 
 async function fetchOnlinePrices(
-  requests: readonly WarehousePriceRequest[],
+  requests: readonly PriceRequest[],
   options: WarehousePriceOptions,
 ): Promise<{
-  items: Array<ReportPriceObservation & WarehousePriceRequest>;
+  items: Array<ReportPriceObservation & PriceRequest>;
   diagnostic: ReportSourceDiagnostic;
 }> {
   const fetchFn = options.fetchFn ?? fetch;
   const observedAt = (options.now ?? (() => new Date()))().toISOString();
-  const configuredBatchSize = options.batchSize ?? MAX_BATCH_SIZE;
-  const batchSize = Math.min(configuredBatchSize, MAX_BATCH_SIZE);
+  const batchSize = validatedBatchSize(options.batchSize ?? MAX_BATCH_SIZE);
   const createTimeoutSignal =
     options.createTimeoutSignal ??
     ((milliseconds: number) => AbortSignal.timeout(milliseconds));
   const timeoutMilliseconds =
     options.timeoutMilliseconds ?? EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS;
-  const groups = new Map<string, WarehousePriceRequest[]>();
+  const groups = new Map<string, PriceRequest[]>();
   for (const request of requests) {
     if (
       !DIGITS.test(request.itemNumber) ||
@@ -483,7 +538,7 @@ async function fetchOnlinePrices(
     values.push(request);
     groups.set(request.warehouseNumber, values);
   }
-  const items: Array<ReportPriceObservation & WarehousePriceRequest> = [];
+  const items: Array<ReportPriceObservation & PriceRequest> = [];
   let failedBatches = 0;
   for (const [warehouseNumber, group] of groups) {
     for (let offset = 0; offset < group.length; offset += batchSize) {
@@ -492,7 +547,7 @@ async function fetchOnlinePrices(
         const response = await fetchFn(PRODUCT_ENDPOINT, {
           body: JSON.stringify({
             query: productQuery(
-              batch.map((value) => value.itemNumber),
+              [...new Set(batch.map((value) => value.itemNumber))],
               warehouseNumber,
             ),
             variables: {},
@@ -513,14 +568,16 @@ async function fetchOnlinePrices(
           throw new Error('Malformed or errored GraphQL response');
         }
         for (const request of batch) {
-          const raw = parsed.data.data.products.catalogData.find((value) => {
-            const product = catalogProductSchema.safeParse(value);
-            return (
-              product.success && product.data.itemNumber === request.itemNumber
-            );
-          });
-          const product =
-            raw === undefined ? null : catalogProductSchema.parse(raw);
+          const exactProducts = parsed.data.data.products.catalogData.flatMap(
+            (value) => {
+              const product = catalogProductSchema.safeParse(value);
+              return product.success &&
+                product.data.itemNumber === request.itemNumber
+                ? [product.data]
+                : [];
+            },
+          );
+          const product = exactProducts.length === 1 ? exactProducts[0] : null;
           const cents = parseWirePriceToCents(product?.priceData?.price);
           items.push({
             ...request,
@@ -528,7 +585,11 @@ async function fetchOnlinePrices(
               ? available('costco_com', cents, CATALOG_SOURCE, observedAt)
               : unavailable(
                   'costco_com',
-                  raw === undefined ? 'product_not_found' : 'invalid_price',
+                  exactProducts.length === 0
+                    ? 'product_not_found'
+                    : exactProducts.length > 1
+                      ? 'ambiguous_price'
+                      : 'invalid_price',
                 )),
           });
         }
@@ -548,22 +609,28 @@ async function fetchOnlinePrices(
     diagnostic: diagnostic(
       'costco_com',
       CATALOG_SOURCE,
-      failedBatches > 0 ? 'error' : 'ok',
+      requests.length === 0
+        ? 'unavailable'
+        : failedBatches > 0
+          ? 'error'
+          : 'ok',
       observedAt,
-      failedBatches > 0
-        ? 'Costco.com lookup completed, but one or more batches failed.'
-        : 'Costco.com product lookup completed.',
+      requests.length === 0
+        ? 'Costco.com product lookup is not applicable.'
+        : failedBatches > 0
+          ? 'Costco.com lookup completed, but one or more batches failed.'
+          : 'Costco.com product lookup completed.',
     ),
   };
 }
 
 async function fetchSavingsPrices(
-  requests: readonly WarehousePriceRequest[],
+  requests: readonly PriceRequest[],
   now: Date,
   fetchFn: typeof fetch,
   signal: AbortSignal,
 ): Promise<{
-  items: Array<ReportPriceObservation & WarehousePriceRequest>;
+  items: Array<ReportPriceObservation & PriceRequest>;
   diagnostic: ReportSourceDiagnostic;
 }> {
   const observedAt = now.toISOString();
@@ -854,8 +921,50 @@ function reportPriceOnly(
   };
 }
 
-function priceKey(value: WarehousePriceRequest): string {
+function sourcePriceKey(value: WarehousePriceRequest): string {
   return `${value.itemNumber}\u0000${value.warehouseNumber}`;
+}
+
+function evidenceKey(value: PriceRequest): string {
+  return `${value.purchaseChannel}\u0000${sourcePriceKey(value)}`;
+}
+
+function deduplicatePriceRequests(
+  requests: readonly PriceRequest[],
+): PriceRequest[] {
+  const unique = new Map<string, PriceRequest>();
+  for (const request of requests) {
+    if (
+      request.purchaseChannel !== 'warehouse' &&
+      request.purchaseChannel !== 'costco_com'
+    ) {
+      continue;
+    }
+    const key = evidenceKey(request);
+    const description =
+      request.description?.trim() || unique.get(key)?.description;
+    unique.set(key, {
+      ...(description === undefined ? {} : { description }),
+      itemNumber: request.itemNumber,
+      purchaseChannel: request.purchaseChannel,
+      warehouseNumber: request.warehouseNumber,
+    });
+  }
+  return [...unique.values()];
+}
+
+function notApplicableDiagnostic(
+  channel: ReportSourceDiagnostic['channel'],
+  source: string,
+  observedAt: string,
+): ReportSourceDiagnostic {
+  return diagnostic(
+    channel,
+    source,
+    'unavailable',
+    observedAt,
+    `${source} is not applicable.`,
+  );
 }
 
 function diagnostic(

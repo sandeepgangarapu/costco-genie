@@ -776,6 +776,7 @@ describe('runPriceCheck', () => {
       {
         description: 'Kirkland Trail Mix',
         itemNumber: '100978861',
+        purchaseChannel: 'warehouse',
         warehouseNumber: '129',
       },
     ]);
@@ -856,6 +857,7 @@ describe('runPriceCheck', () => {
       {
         description: 'KS ORG EVOO',
         itemNumber: '692731',
+        purchaseChannel: 'warehouse',
         warehouseNumber: '129',
       },
     ]);

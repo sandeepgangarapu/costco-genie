@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import type { PriceObservation, Purchase } from '../src/domain/types.js';
-import { findAdjustments } from '../src/core/matcher.js';
+import type {
+  PriceObservation,
+  Purchase,
+  ReportPriceObservation,
+} from '../src/domain/types.js';
+import {
+  findAdjustments,
+  findOnlineAdjustments,
+  type OnlinePriceEvidence,
+} from '../src/core/matcher.js';
 
 const now = new Date('2026-08-18T12:00:00.000Z');
 
@@ -11,6 +19,7 @@ const purchase: Purchase = {
   id: 'purchase-1',
   itemNumber: '100001',
   paidUnitCents: 1500,
+  purchaseChannel: 'warehouse',
   purchasedAt: '2026-07-19T08:00:00.000Z',
   quantity: 3,
   receiptId: 'receipt-1',
@@ -31,12 +40,45 @@ const config = {
   minimumSavingsCents: 1,
 };
 
+const onlinePurchase: Purchase = {
+  ...purchase,
+  id: 'online-purchase-1',
+  purchaseChannel: 'costco_com',
+  purchasedAt: '2026-07-20T08:00:00.000Z',
+  receiptId: 'costco_com:order-1',
+  warehouseNumber: '847',
+};
+
+function onlineEvidence(
+  pricePatch: Partial<ReportPriceObservation> = {},
+  evidencePatch: Partial<OnlinePriceEvidence> = {},
+): OnlinePriceEvidence {
+  return {
+    itemNumber: onlinePurchase.itemNumber,
+    purchaseChannel: 'costco_com',
+    warehouseNumber: onlinePurchase.warehouseNumber,
+    prices: {
+      costcoCom: {
+        channel: 'costco_com',
+        observedAt: observation.observedAt,
+        promotionText: null,
+        source: 'costco_product_api',
+        unavailableReason: null,
+        unitPriceCents: 1300,
+        ...pricePatch,
+      },
+    },
+    ...evidencePatch,
+  };
+}
+
 describe('findAdjustments', () => {
   it('finds exact same-warehouse lower prices on the inclusive 30-day boundary with quantity-aware savings', () => {
     const candidates = findAdjustments([purchase], [observation], now, config);
 
     expect(candidates).toEqual([
       {
+        comparisonChannel: 'warehouse',
         purchase,
         observation,
         currentUnitCents: 1200,
@@ -101,6 +143,7 @@ describe('findAdjustments', () => {
 
     expect(candidates).toEqual([
       {
+        comparisonChannel: 'warehouse',
         purchase,
         observation: newestUsable,
         currentUnitCents: 1100,
@@ -179,7 +222,11 @@ describe('findAdjustments', () => {
     expect(
       findAdjustments([printedAtUtc], [observation], westCoastNow, config),
     ).toEqual([
-      expect.objectContaining({ daysRemaining: 0, purchase: printedAtUtc }),
+      expect.objectContaining({
+        comparisonChannel: 'warehouse',
+        daysRemaining: 0,
+        purchase: printedAtUtc,
+      }),
     ]);
   });
 
@@ -227,4 +274,128 @@ describe('findAdjustments', () => {
       expect(candidates).toEqual([]);
     },
   );
+});
+
+describe('findOnlineAdjustments', () => {
+  it('finds an exact lower Costco.com price at the inclusive savings threshold using active quantity and Mac-local days', () => {
+    const westCoastNow = new (class extends Date {
+      override getFullYear() {
+        return 2026;
+      }
+      override getMonth() {
+        return 7;
+      }
+      override getDate() {
+        return 18;
+      }
+    })('2026-08-19T06:30:00.000Z');
+    const evidence = onlineEvidence();
+
+    expect(
+      findOnlineAdjustments([onlinePurchase], [evidence], westCoastNow, {
+        adjustmentWindowDays: 30,
+        minimumSavingsCents: 600,
+      }),
+    ).toEqual([
+      {
+        comparisonChannel: 'costco_com',
+        currentUnitCents: 1300,
+        daysRemaining: 1,
+        observation: {
+          itemNumber: onlinePurchase.itemNumber,
+          observedAt: observation.observedAt,
+          source: 'costco_product_api',
+          unitPriceCents: 1300,
+          unresolvedReason: null,
+          warehouseNumber: onlinePurchase.warehouseNumber,
+        },
+        purchase: onlinePurchase,
+        savingsCents: 600,
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      'an equal price',
+      onlinePurchase,
+      onlineEvidence({ unitPriceCents: 1500 }),
+    ],
+    [
+      'a higher price',
+      onlinePurchase,
+      onlineEvidence({ unitPriceCents: 1600 }),
+    ],
+    [
+      'an unavailable price',
+      onlinePurchase,
+      onlineEvidence({
+        observedAt: null,
+        source: null,
+        unavailableReason: 'product_not_found',
+        unitPriceCents: null,
+      }),
+    ],
+    [
+      'savings below the minimum',
+      onlinePurchase,
+      onlineEvidence({ unitPriceCents: 1301 }),
+    ],
+    [
+      'an order outside the window',
+      { ...onlinePurchase, purchasedAt: '2026-07-18T08:00:00.000Z' },
+      onlineEvidence(),
+    ],
+    [
+      'an item-number mismatch',
+      onlinePurchase,
+      onlineEvidence({}, { itemNumber: '999999' }),
+    ],
+    [
+      'an online scope mismatch',
+      onlinePurchase,
+      onlineEvidence({}, { warehouseNumber: '999' }),
+    ],
+    [
+      'warehouse evidence',
+      onlinePurchase,
+      onlineEvidence({ channel: 'warehouse' }),
+    ],
+    [
+      'Same-Day evidence',
+      onlinePurchase,
+      onlineEvidence({ channel: 'same_day' }),
+    ],
+    [
+      'Costco.com evidence attached to a warehouse request',
+      onlinePurchase,
+      onlineEvidence({}, { purchaseChannel: 'warehouse' }),
+    ],
+  ])('rejects %s', (_, candidatePurchase, evidence) => {
+    expect(
+      findOnlineAdjustments([candidatePurchase], [evidence], now, {
+        adjustmentWindowDays: 30,
+        minimumSavingsCents: 600,
+      }),
+    ).toEqual([]);
+  });
+
+  it('rejects online purchases from the warehouse matcher and warehouse purchases from the online matcher', () => {
+    expect(
+      findAdjustments(
+        [onlinePurchase],
+        [{ ...observation, warehouseNumber: onlinePurchase.warehouseNumber }],
+        now,
+        config,
+      ),
+    ).toEqual([]);
+    expect(
+      findOnlineAdjustments(
+        [purchase],
+        [onlineEvidence({}, { warehouseNumber: purchase.warehouseNumber })],
+        now,
+        config,
+      ),
+    ).toEqual([]);
+  });
 });

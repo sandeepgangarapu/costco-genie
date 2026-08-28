@@ -226,9 +226,9 @@ describe('Database', () => {
     corrupt.close();
 
     const database = Database.openReadOnly(path);
-    expect(
-      () => database.recentPurchases('2026-08-01T00:00:00.000Z'),
-    ).toThrow(/invalid purchase channel/i);
+    expect(() => database.recentPurchases('2026-08-01T00:00:00.000Z')).toThrow(
+      /invalid purchase channel/i,
+    );
     database.close();
   });
 

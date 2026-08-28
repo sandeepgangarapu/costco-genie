@@ -5,6 +5,7 @@ import {
   fetchWarehousePrices,
   type WarehousePriceRequest,
 } from '../src/costco/price-client.js';
+import type { PurchaseChannel } from '../src/domain/types.js';
 
 const observedAt = '2026-08-18T21:00:00.000Z';
 
@@ -22,8 +23,16 @@ function productResponse(catalogData: unknown[]): Response {
   });
 }
 
-function request(itemNumber: string, warehouseNumber = '123') {
-  return { itemNumber, warehouseNumber };
+function request(
+  itemNumber: string,
+  warehouseNumber = '123',
+  purchaseChannel: PurchaseChannel = 'warehouse',
+) {
+  return { itemNumber, purchaseChannel, warehouseNumber };
+}
+
+function onlineRequest(itemNumber: string) {
+  return request(itemNumber, '847', 'costco_com');
 }
 
 describe('fetchWarehousePrices', () => {
@@ -359,7 +368,13 @@ describe('Same-Day report evidence', () => {
 
     expect(sameDayCalls).toEqual([
       {
-        requests: [{ itemNumber: '1753490', warehouseNumber: '110' }],
+        requests: [
+          {
+            itemNumber: '1753490',
+            purchaseChannel: 'warehouse',
+            warehouseNumber: '110',
+          },
+        ],
         options: expect.objectContaining({
           postalCode: '98029',
           deliveryAddress: '2520 NE Park Dr, Issaquah, WA 98029',
@@ -439,6 +454,190 @@ describe('Same-Day report evidence', () => {
 });
 
 describe('fetchReportPriceEvidence', () => {
+  it('partitions mixed requests while retaining Costco.com evidence for both purchase channels', async () => {
+    const productQueries: string[] = [];
+    const sameDayRequests: unknown[] = [];
+    let savingsRequests = 0;
+    const fetchFn: typeof fetch = async (input, init) => {
+      if (String(input).includes('/warehouse-savings')) {
+        savingsRequests += 1;
+        return new Response('<p>No current advertised items</p>');
+      }
+      const query = (JSON.parse(String(init?.body)) as { query: string }).query;
+      productQueries.push(query);
+      const itemNumbers = [...query.matchAll(/"(\d+)"/gu)]
+        .map((match) => match[1])
+        .filter((value): value is string => value !== undefined);
+      return productResponse(
+        itemNumbers.map((itemNumber) => product(itemNumber, '12.34', 'WH')),
+      );
+    };
+
+    const result = await fetchReportPriceEvidence(
+      [request('111111', '123'), onlineRequest('222222')],
+      {
+        fetchFn,
+        now: () => new Date(observedAt),
+        sameDayMarkupPercent: 13.5,
+        sameDayPostalCode: '98029',
+        sameDayPriceFetcher: async (requests) => {
+          sameDayRequests.push(requests);
+          return [];
+        },
+      },
+    );
+
+    expect(productQueries).toHaveLength(3);
+    expect(productQueries[0]).toContain('itemNumbers: ["111111"]');
+    expect(productQueries[0]).not.toContain('"222222"');
+    expect(productQueries.slice(1).join('\n')).toContain('"111111"');
+    expect(productQueries.slice(1).join('\n')).toContain('"222222"');
+    expect(savingsRequests).toBe(1);
+    expect(sameDayRequests).toEqual([
+      [
+        {
+          itemNumber: '111111',
+          purchaseChannel: 'warehouse',
+          warehouseNumber: '123',
+        },
+      ],
+    ]);
+    expect(result.items).toMatchObject([
+      { purchaseChannel: 'warehouse', itemNumber: '111111' },
+      {
+        purchaseChannel: 'costco_com',
+        itemNumber: '222222',
+        prices: {
+          warehouse: {
+            source: null,
+            unavailableReason: 'not_applicable',
+            unitPriceCents: null,
+          },
+          warehouseSavings: {
+            source: null,
+            unavailableReason: 'not_applicable',
+            unitPriceCents: null,
+          },
+          costcoCom: { unitPriceCents: 1234 },
+          sameDay: {
+            source: null,
+            unavailableReason: 'not_applicable',
+            unitPriceCents: null,
+          },
+        },
+      },
+    ]);
+  });
+
+  it('keeps the same item number separate across warehouse and Costco.com scopes', async () => {
+    const fetchFn: typeof fetch = async (input) =>
+      String(input).includes('/warehouse-savings')
+        ? new Response('<p>No current advertised items</p>')
+        : productResponse([product('111111', '12.34', 'WH')]);
+
+    const result = await fetchReportPriceEvidence(
+      [request('111111', '847'), onlineRequest('111111')],
+      { fetchFn, now: () => new Date(observedAt) },
+    );
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items).toMatchObject([
+      {
+        purchaseChannel: 'warehouse',
+        itemNumber: '111111',
+        warehouseNumber: '847',
+        prices: { warehouse: { unitPriceCents: 1234 } },
+      },
+      {
+        purchaseChannel: 'costco_com',
+        itemNumber: '111111',
+        warehouseNumber: '847',
+        prices: {
+          warehouse: { unavailableReason: 'not_applicable' },
+          costcoCom: { unitPriceCents: 1234 },
+        },
+      },
+    ]);
+  });
+
+  it('does not invoke warehouse-only sources for an online-only request', async () => {
+    let productCalls = 0;
+    let savingsCalls = 0;
+    let sameDayCalls = 0;
+    const fetchFn: typeof fetch = async (input) => {
+      if (String(input).includes('/warehouse-savings')) {
+        savingsCalls += 1;
+        throw new Error('warehouse savings must be skipped');
+      }
+      productCalls += 1;
+      return productResponse([product('222222', '10.00', 'ONLINE')]);
+    };
+
+    const result = await fetchReportPriceEvidence([onlineRequest('222222')], {
+      fetchFn,
+      now: () => new Date(observedAt),
+      sameDayMarkupPercent: 13.5,
+      sameDayPostalCode: '98029',
+      sameDayPriceFetcher: async () => {
+        sameDayCalls += 1;
+        throw new Error('Same-Day must be skipped');
+      },
+    });
+
+    expect(productCalls).toBe(1);
+    expect(savingsCalls).toBe(0);
+    expect(sameDayCalls).toBe(0);
+    expect(
+      result.diagnostics.filter(
+        ({ channel }) =>
+          channel === 'warehouse' ||
+          channel === 'warehouse_savings' ||
+          channel === 'same_day',
+      ),
+    ).not.toContainEqual(expect.objectContaining({ status: 'error' }));
+  });
+
+  it('rejects an invalid batch size before an online-only catalog lookup', async () => {
+    let calls = 0;
+
+    await expect(
+      fetchReportPriceEvidence([onlineRequest('222222')], {
+        batchSize: Number.NaN,
+        fetchFn: async () => {
+          calls += 1;
+          return productResponse([]);
+        },
+        now: () => new Date(observedAt),
+      }),
+    ).rejects.toThrow(/batch size.*positive integer/iu);
+    expect(calls).toBe(0);
+  });
+
+  it.each([
+    ['an item-number mismatch', [product('999999', '10.00', 'ONLINE')]],
+    [
+      'ambiguous exact-item matches',
+      [
+        product('222222', '10.00', 'ONLINE'),
+        product('222222', '9.00', 'ONLINE'),
+      ],
+    ],
+    ['a zero price', [product('222222', '0.00', 'ONLINE')]],
+    ['a malformed price', [product('222222', 'ten dollars', 'ONLINE')]],
+  ])('keeps Costco.com evidence unavailable for %s', async (_, catalogData) => {
+    const fetchFn: typeof fetch = async () => productResponse(catalogData);
+
+    const result = await fetchReportPriceEvidence([onlineRequest('222222')], {
+      fetchFn,
+      now: () => new Date(observedAt),
+    });
+
+    expect(result.items[0]?.prices.costcoCom).toMatchObject({
+      unitPriceCents: null,
+      unavailableReason: expect.any(String),
+    });
+  });
+
   it('separates online prices and accepts only current exact-item Warehouse Savings final prices', async () => {
     // Sanitized from the live 2026-08-21 page: global validity copy plus the
     // escaped Next.js hydration fields used by a real coupon card.

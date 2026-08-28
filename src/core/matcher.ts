@@ -2,11 +2,20 @@ import type {
   AdjustmentCandidate,
   PriceObservation,
   Purchase,
+  PurchaseChannel,
+  ReportPriceChannels,
 } from '../domain/types.js';
 
 export interface MatcherConfig {
   readonly adjustmentWindowDays: number;
   readonly minimumSavingsCents: number;
+}
+
+export interface OnlinePriceEvidence {
+  readonly purchaseChannel: PurchaseChannel;
+  readonly itemNumber: string;
+  readonly warehouseNumber: string;
+  readonly prices: Pick<ReportPriceChannels, 'costcoCom'>;
 }
 
 interface ParsedTimestamp {
@@ -32,23 +41,15 @@ export function findAdjustments(
 
   return purchases
     .flatMap((purchase) => {
-      if (
-        !isSafePositiveInteger(purchase.paidUnitCents) ||
-        !isSafePositiveInteger(purchase.quantity)
-      ) {
+      if (purchase.purchaseChannel !== 'warehouse') {
         return [];
       }
-
-      const purchasedAt = parseTimestamp(purchase.purchasedAt);
-      if (!purchasedAt) {
-        return [];
-      }
-
-      const elapsedDays =
-        (nowCalendarDay - purchasedAt.calendarDay) / 86_400_000;
-      if (elapsedDays < 0 || elapsedDays > config.adjustmentWindowDays) {
-        return [];
-      }
+      const daysRemaining = eligibleDaysRemaining(
+        purchase,
+        nowCalendarDay,
+        config,
+      );
+      if (daysRemaining === null) return [];
 
       const observation = latestObservations.get(
         observationKey(purchase.itemNumber, purchase.warehouseNumber),
@@ -57,42 +58,155 @@ export function findAdjustments(
         return [];
       }
 
-      const currentUnitCents = observation.unitPriceCents;
-      if (currentUnitCents >= purchase.paidUnitCents) {
-        return [];
-      }
-
-      const savingsCents =
-        (purchase.paidUnitCents - currentUnitCents) * purchase.quantity;
-      if (!isSafePositiveInteger(savingsCents)) {
-        return [];
-      }
-      if (savingsCents < config.minimumSavingsCents) {
-        return [];
-      }
-
-      return [
-        {
-          currentUnitCents,
-          daysRemaining: Math.max(
-            0,
-            Math.min(
-              config.adjustmentWindowDays,
-              config.adjustmentWindowDays - elapsedDays,
-            ),
-          ),
-          observation,
-          purchase,
-          savingsCents,
-        },
-      ];
+      return candidateForPrice(
+        purchase,
+        observation,
+        observation.unitPriceCents,
+        daysRemaining,
+        config,
+        'warehouse',
+      );
     })
-    .sort(
-      (left, right) =>
-        left.daysRemaining - right.daysRemaining ||
-        right.savingsCents - left.savingsCents ||
-        left.purchase.id.localeCompare(right.purchase.id),
-    );
+    .sort(compareCandidates);
+}
+
+export function findOnlineAdjustments(
+  purchases: readonly Purchase[],
+  evidenceItems: readonly OnlinePriceEvidence[],
+  now: Date,
+  config: MatcherConfig,
+): AdjustmentCandidate[] {
+  const nowCalendarDay = calendarDayForDate(now);
+  if (nowCalendarDay === null || !isValidConfig(config)) return [];
+
+  const latestEvidence = latestOnlineEvidence(evidenceItems);
+  return purchases
+    .flatMap((purchase) => {
+      if (purchase.purchaseChannel !== 'costco_com') return [];
+      const daysRemaining = eligibleDaysRemaining(
+        purchase,
+        nowCalendarDay,
+        config,
+      );
+      if (daysRemaining === null) return [];
+
+      const evidence = latestEvidence.get(
+        observationKey(purchase.itemNumber, purchase.warehouseNumber),
+      );
+      if (!evidence) return [];
+      const price = evidence.prices.costcoCom;
+      if (!isUsableOnlinePrice(price)) return [];
+
+      const observation: PriceObservation = {
+        itemNumber: purchase.itemNumber,
+        observedAt: price.observedAt,
+        source: price.source,
+        unitPriceCents: price.unitPriceCents,
+        unresolvedReason: null,
+        warehouseNumber: purchase.warehouseNumber,
+      };
+      return candidateForPrice(
+        purchase,
+        observation,
+        price.unitPriceCents,
+        daysRemaining,
+        config,
+        'costco_com',
+      );
+    })
+    .sort(compareCandidates);
+}
+
+function latestOnlineEvidence(
+  evidenceItems: readonly OnlinePriceEvidence[],
+): Map<string, OnlinePriceEvidence> {
+  const latest = new Map<
+    string,
+    { evidence: OnlinePriceEvidence; observedAt: number }
+  >();
+  for (const evidence of evidenceItems) {
+    if (
+      evidence.purchaseChannel !== 'costco_com' ||
+      evidence.prices.costcoCom.channel !== 'costco_com' ||
+      evidence.prices.costcoCom.observedAt === null
+    ) {
+      continue;
+    }
+    const observedAt = parseTimestamp(evidence.prices.costcoCom.observedAt);
+    if (!observedAt) continue;
+    const key = observationKey(evidence.itemNumber, evidence.warehouseNumber);
+    const existing = latest.get(key);
+    if (!existing || observedAt.instant > existing.observedAt) {
+      latest.set(key, { evidence, observedAt: observedAt.instant });
+    }
+  }
+  return new Map(
+    [...latest.entries()].map(([key, value]) => [key, value.evidence]),
+  );
+}
+
+function eligibleDaysRemaining(
+  purchase: Purchase,
+  nowCalendarDay: number,
+  config: MatcherConfig,
+): number | null {
+  if (
+    !isSafePositiveInteger(purchase.paidUnitCents) ||
+    !isSafePositiveInteger(purchase.quantity)
+  ) {
+    return null;
+  }
+  const purchasedAt = parseTimestamp(purchase.purchasedAt);
+  if (!purchasedAt) return null;
+  const elapsedDays = (nowCalendarDay - purchasedAt.calendarDay) / 86_400_000;
+  if (elapsedDays < 0 || elapsedDays > config.adjustmentWindowDays) return null;
+  return Math.max(
+    0,
+    Math.min(
+      config.adjustmentWindowDays,
+      config.adjustmentWindowDays - elapsedDays,
+    ),
+  );
+}
+
+function candidateForPrice(
+  purchase: Purchase,
+  observation: PriceObservation,
+  currentUnitCents: number,
+  daysRemaining: number,
+  config: MatcherConfig,
+  comparisonChannel: AdjustmentCandidate['comparisonChannel'],
+): AdjustmentCandidate[] {
+  if (currentUnitCents >= purchase.paidUnitCents) return [];
+  const savingsCents =
+    (purchase.paidUnitCents - currentUnitCents) * purchase.quantity;
+  if (
+    !isSafePositiveInteger(savingsCents) ||
+    savingsCents < config.minimumSavingsCents
+  ) {
+    return [];
+  }
+  return [
+    {
+      comparisonChannel,
+      currentUnitCents,
+      daysRemaining,
+      observation,
+      purchase,
+      savingsCents,
+    },
+  ];
+}
+
+function compareCandidates(
+  left: AdjustmentCandidate,
+  right: AdjustmentCandidate,
+): number {
+  return (
+    left.daysRemaining - right.daysRemaining ||
+    right.savingsCents - left.savingsCents ||
+    left.purchase.id.localeCompare(right.purchase.id)
+  );
 }
 
 function latestByItemAndWarehouse(
@@ -131,6 +245,22 @@ function isUsable(
     observation.unresolvedReason === null &&
     observation.unitPriceCents !== null &&
     isSafePositiveInteger(observation.unitPriceCents)
+  );
+}
+
+function isUsableOnlinePrice(
+  price: ReportPriceChannels['costcoCom'],
+): price is ReportPriceChannels['costcoCom'] & {
+  readonly observedAt: string;
+  readonly source: string;
+  readonly unitPriceCents: number;
+} {
+  return (
+    price.channel === 'costco_com' &&
+    price.unavailableReason === null &&
+    price.observedAt !== null &&
+    price.source !== null &&
+    isSafePositiveInteger(price.unitPriceCents ?? 0)
   );
 }
 
