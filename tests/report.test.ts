@@ -80,6 +80,29 @@ describe('report rendering', () => {
     },
   );
 
+  it.each([
+    ['compact', renderCompactReport],
+    ['text', renderTextReport],
+    ['HTML', renderHtmlReport],
+  ])(
+    'scopes warehouse and Costco.com guidance in a mixed %s report',
+    (_name, render) => {
+      const report = render({ candidates: [candidate, onlineCandidate] });
+
+      expect(report).toContain(
+        'Warehouse opportunities: verify at the original warehouse.',
+      );
+      expect(report).toContain(
+        'Costco.com opportunities: review the current Costco.com price; reported savings are potential only.',
+      );
+      expect(report).not.toContain(
+        'Verify each one at the original warehouse before requesting an adjustment.',
+      );
+      expect(report).toContain('Costco.com order');
+      expect(report).toContain('Current Costco.com price: $11.99');
+    },
+  );
+
   it('renders a compact potential-adjustment text report with original warehouse, prices, savings, and days remaining', () => {
     const report = renderTextReport({ candidates: [candidate] });
 

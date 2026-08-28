@@ -248,7 +248,7 @@ function isUsable(
   );
 }
 
-function isUsableOnlinePrice(
+export function isUsableOnlinePrice(
   price: ReportPriceChannels['costcoCom'],
 ): price is ReportPriceChannels['costcoCom'] & {
   readonly observedAt: string;
@@ -259,6 +259,7 @@ function isUsableOnlinePrice(
     price.channel === 'costco_com' &&
     price.unavailableReason === null &&
     price.observedAt !== null &&
+    parseTimestamp(price.observedAt) !== null &&
     price.source !== null &&
     isSafePositiveInteger(price.unitPriceCents ?? 0)
   );

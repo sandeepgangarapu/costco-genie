@@ -34,20 +34,14 @@ export function renderCompactReport(summary: AdjustmentReportSummary): string {
   const hasWarehouse = summary.candidates.some(
     (candidate) => !isOnlineCandidate(candidate),
   );
-  const footer = [
-    ...(hasWarehouse
-      ? [
-          hasEstimates
-            ? 'Estimated from Same-Day pricing. Verify at the original warehouse.'
-            : 'Verify at the original warehouse.',
-        ]
-      : []),
-    ...(hasOnline
-      ? [
-          'Costco.com prices can change; review the order before contacting Costco.',
-        ]
-      : []),
-  ].join(' ');
+  const footer =
+    hasWarehouse && hasOnline
+      ? mixedNotificationGuidance(hasEstimates)
+      : hasWarehouse
+        ? hasEstimates
+          ? 'Estimated from Same-Day pricing. Verify at the original warehouse.'
+          : 'Verify at the original warehouse.'
+        : 'Costco.com prices can change; review the order before contacting Costco.';
   const lines = [
     hasOnline && !hasWarehouse
       ? `${String(count)} Costco.com price ${count === 1 ? 'drop' : 'drops'} • ${formatCents(totalSavings)} total potential savings`
@@ -213,7 +207,7 @@ function notificationGuidance(
   if (!hasWarehouse && hasOnline) {
     return 'Review the current Costco.com price before contacting Costco; reported savings are potential only.';
   }
-  return 'Verify warehouse opportunities at the original warehouse. Review the current Costco.com price before contacting Costco; reported savings are potential only.';
+  return mixedNotificationGuidance(false);
 }
 
 function htmlNotificationGuidance(
@@ -226,7 +220,11 @@ function htmlNotificationGuidance(
     'Review the current Costco.com price before contacting Costco; reported savings are potential only.';
   if (!hasOnline) return warehouseGuidance;
   if (!hasWarehouse && hasOnline) return onlineGuidance;
-  return `${warehouseGuidance} ${onlineGuidance}`;
+  return mixedNotificationGuidance(false);
+}
+
+function mixedNotificationGuidance(hasEstimates: boolean): string {
+  return `Warehouse opportunities: ${hasEstimates ? 'Same-Day prices are estimates; ' : ''}verify at the original warehouse. Costco.com opportunities: review the current Costco.com price; reported savings are potential only.`;
 }
 
 function purchaseDate(candidate: AdjustmentCandidate): string {

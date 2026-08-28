@@ -1,6 +1,10 @@
 import type { AppConfig } from '../config/config.js';
 import { selectAlerts, type AlertSelection } from '../core/alert-policy.js';
-import { findAdjustments, findOnlineAdjustments } from '../core/matcher.js';
+import {
+  findAdjustments,
+  findOnlineAdjustments,
+  isUsableOnlinePrice,
+} from '../core/matcher.js';
 import { normalizeReceipts } from '../core/normalize-receipts.js';
 import { buildReportRows } from '../core/report-rows.js';
 import type { CostcoTokens } from '../costco/browser-session.js';
@@ -680,7 +684,7 @@ function onlineReportStatus(
   if (candidatePurchaseIds.has(row.purchase.id)) {
     return { reason: null, status: 'candidate' };
   }
-  if (!usableReportPrice(price)) {
+  if (!isUsableOnlinePrice(price)) {
     return { reason: 'costco_com_price_unavailable', status: 'not_eligible' };
   }
   return {
@@ -890,7 +894,7 @@ function onlineUnresolvedPriceCount(
   return requests.filter((request) => {
     if (request.purchaseChannel !== 'costco_com') return false;
     const item = evidenceByKey.get(priceKey(request));
-    return item === undefined || !usableReportPrice(item.prices.costcoCom);
+    return item === undefined || !isUsableOnlinePrice(item.prices.costcoCom);
   }).length;
 }
 

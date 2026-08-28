@@ -1270,6 +1270,68 @@ describe('runPriceCheck', () => {
     deps.database.close();
   });
 
+  it.each([
+    ['source', { source: null }],
+    ['observedAt', { observedAt: null }],
+  ] as const)(
+    'classifies a lower Costco.com price with null %s as unresolved evidence',
+    async (_field, provenancePatch) => {
+      const reports: FullRunReport[] = [];
+      const deps = dependencies({
+        fetchEvidence: async (requests) => ({
+          diagnostics: [],
+          items: requests.map((request) => ({
+            ...request,
+            prices: {
+              warehouse: unavailableReportPrice('warehouse'),
+              warehouseSavings: unavailableReportPrice('warehouse_savings'),
+              costcoCom: {
+                ...availableReportPrice('costco_com', 1_500),
+                ...provenancePatch,
+              },
+              sameDay: unavailableReportPrice('same_day'),
+            },
+          })),
+        }),
+        fetchOnlineOrders: async () => ({
+          diagnostic: {
+            channel: null,
+            message: 'Costco.com order import completed with 1 purchase.',
+            observedAt: NOW.toISOString(),
+            source: 'costco_online_orders',
+            status: 'ok',
+          },
+          failedDetailBatches: 0,
+          purchases: [ONLINE_PURCHASE],
+        }),
+        fetchReceipts: async () => [],
+        writeReport: async (report) => {
+          reports.push(report);
+          return {
+            htmlFile: '/reports/missing-provenance.html',
+            csvFile: '/reports/missing-provenance.csv',
+            jsonFile: '/reports/missing-provenance.json',
+          };
+        },
+      });
+
+      const summary = await runPriceCheck(deps, { now: () => NOW });
+
+      expect(summary).toMatchObject({
+        candidatesFound: 0,
+        onlineUnresolvedPrices: 1,
+        unresolvedPrices: 1,
+      });
+      expect(reports[0]?.rows).toEqual([
+        expect.objectContaining({
+          reason: 'costco_com_price_unavailable',
+          status: 'not_eligible',
+        }),
+      ]);
+      deps.database.close();
+    },
+  );
+
   it('writes a full all-line report with separated live channels and historical receipt evidence', async () => {
     const reports: FullRunReport[] = [];
     const earlier = {
