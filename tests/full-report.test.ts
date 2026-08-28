@@ -18,6 +18,7 @@ import type {
   FullReportRow,
   FullRunReport,
   ReportPriceChannels,
+  ReportPriceObservation,
 } from '../src/domain/types.js';
 import { writeFullReport } from '../src/notifications/full-report.js';
 
@@ -254,6 +255,114 @@ describe('writeFullReport', () => {
         rows: [{ ...onlineRow, comparisonChannel: 'warehouse' }],
       }),
     ).rejects.toThrow(/Costco\.com.*comparison/i);
+  });
+
+  it.each([
+    'warehouse',
+    'receiptHistory',
+    'warehouseSavings',
+    'sameDay',
+  ] as const)(
+    'rejects source leakage in online %s evidence',
+    async (evidenceKey) => {
+      const paths = appPaths(createTemporaryHome());
+      const report = onlineReportWithEvidencePatch(evidenceKey, {
+        source: 'leaked_source',
+      });
+
+      await expect(writeFullReport(paths, report)).rejects.toThrow(
+        /not_applicable/i,
+      );
+    },
+  );
+
+  it.each([
+    ['channel', { channel: 'costco_com' }],
+    ['unit price', { unitPriceCents: 1 }],
+    ['unavailable reason', { unavailableReason: 'source_not_configured' }],
+    ['observed timestamp', { observedAt: '2026-08-21T15:00:00Z' }],
+    ['promotion', { promotionText: 'leaked promotion' }],
+  ] as const)(
+    'rejects online non-applicable evidence with leaked %s',
+    async (_field, evidencePatch) => {
+      const paths = appPaths(createTemporaryHome());
+      const report = onlineReportWithEvidencePatch('warehouse', evidencePatch);
+
+      await expect(writeFullReport(paths, report)).rejects.toThrow(
+        /channel|not_applicable/i,
+      );
+    },
+  );
+
+  it.each([
+    ['sameDayWarehouseEstimateCents', 1],
+    ['sameDayEstimatedDeltaCents', 1],
+    ['warehouseDeltaCents', 1],
+  ] as const)('rejects online rows with leaked %s', async (field, value) => {
+    const paths = appPaths(createTemporaryHome());
+    const report = mixedReport();
+    const onlineRow = report.rows[1];
+    if (!onlineRow) throw new Error('online fixture row missing');
+
+    await expect(
+      writeFullReport(paths, {
+        ...report,
+        rows: [{ ...onlineRow, [field]: value }],
+      }),
+    ).rejects.toThrow(/Costco\.com.*warehouse|Same-Day/i);
+  });
+
+  it.each([
+    ['warehouse reason', 0, { reason: 'outside_adjustment_window' }],
+    ['Costco.com reason', 1, { reason: 'outside_adjustment_window' }],
+    ['warehouse days', 0, { daysRemaining: null }],
+    ['Costco.com days', 1, { daysRemaining: -1 }],
+  ] as const)(
+    'rejects contradictory candidate %s',
+    async (_caseName, rowIndex, rowPatch) => {
+      const paths = appPaths(createTemporaryHome());
+      const report = mixedReport();
+      const row = report.rows[rowIndex];
+      if (!row) throw new Error('candidate fixture row missing');
+
+      await expect(
+        writeFullReport(paths, {
+          ...report,
+          rows: [{ ...row, ...rowPatch }],
+        }),
+      ).rejects.toThrow(/candidate.*reason|candidate.*days/i);
+    },
+  );
+
+  it('rejects a Same-Day estimate not derived from the configured inverse markup', async () => {
+    const paths = appPaths(createTemporaryHome());
+    const original = sampleReport({
+      ...samplePriceChannels(),
+      warehouse: unavailablePrice('warehouse', 'not_warehouse_price'),
+      sameDay: availablePrice('same_day', 1_531, 'costco_same_day_zip_98029'),
+    });
+    const row = original.rows[0];
+    if (!row) throw new Error('fixture row missing');
+
+    await expect(
+      writeFullReport(paths, {
+        ...original,
+        rows: [
+          {
+            ...row,
+            comparisonChannel: 'same_day',
+            comparisonUnitCents: 1_350,
+            comparisonDeltaCents: 249,
+            potentialSavingsCents: 498,
+            sameDayWarehouseEstimateCents: 1_350,
+            sameDayEstimatedDeltaCents: 249,
+            warehouseDeltaCents: null,
+            status: 'estimated_opportunity',
+            reason: 'same_day_estimate_lower_manual_verification_required',
+          },
+        ],
+      }),
+    ).rejects.toThrow(/inverse.markup|derived Same-Day estimate/i);
   });
 
   it('rejects a Costco.com comparison for a warehouse purchase', async () => {
@@ -534,6 +643,30 @@ function mixedReport(): FullRunReport {
     reason: null,
   };
   return { ...warehouseReport, rows: [...warehouseReport.rows, onlineRow] };
+}
+
+function onlineReportWithEvidencePatch(
+  evidenceKey: keyof ReportPriceChannels,
+  evidencePatch: Partial<ReportPriceObservation>,
+): FullRunReport {
+  const report = mixedReport();
+  const onlineRow = report.rows[1];
+  if (!onlineRow) throw new Error('online fixture row missing');
+  return {
+    ...report,
+    rows: [
+      {
+        ...onlineRow,
+        prices: {
+          ...onlineRow.prices,
+          [evidenceKey]: {
+            ...onlineRow.prices[evidenceKey],
+            ...evidencePatch,
+          },
+        },
+      },
+    ],
+  };
 }
 
 function htmlRowForItem(html: string, itemNumber: string): string {

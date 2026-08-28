@@ -3,6 +3,12 @@ import { renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { AppPaths } from '../config/paths.js';
+import {
+  isCanonicalNotApplicableReportPrice,
+  isUsableOnlinePriceEvidence,
+  isUsableReportPriceEvidence,
+} from '../core/price-evidence.js';
+import { inverseMarkupCents } from '../costco/same-day-client.js';
 import type {
   FullReportRow,
   FullReportFiles,
@@ -487,6 +493,7 @@ function validateReport(report: FullRunReport): void {
         );
       }
     }
+    validateCandidateSemantics(row);
     if (row.purchase.purchaseChannel === 'costco_com') {
       validateOnlineRow(row);
     } else if (row.purchase.purchaseChannel === 'warehouse') {
@@ -497,23 +504,48 @@ function validateReport(report: FullRunReport): void {
   }
 }
 
+function validateCandidateSemantics(row: FullReportRow): void {
+  if (row.status !== 'candidate') return;
+  if (row.reason !== null) {
+    throw new TypeError('A candidate reason must be null.');
+  }
+  if (
+    row.daysRemaining === null ||
+    !Number.isSafeInteger(row.daysRemaining) ||
+    row.daysRemaining < 0
+  ) {
+    throw new TypeError(
+      'Candidate days remaining must be a nonnegative integer.',
+    );
+  }
+}
+
 function validateOnlineRow(row: FullReportRow): void {
-  for (const price of [
-    row.prices.warehouse,
-    row.prices.receiptHistory,
-    row.prices.warehouseSavings,
-    row.prices.sameDay,
-  ]) {
-    if (
-      price.unitPriceCents !== null ||
-      price.unavailableReason !== 'not_applicable'
-    ) {
+  const nonApplicableEvidence: ReadonlyArray<
+    readonly [ReportPriceObservation, PriceChannel]
+  > = [
+    [row.prices.warehouse, 'warehouse'],
+    [row.prices.receiptHistory, 'receipt_history'],
+    [row.prices.warehouseSavings, 'warehouse_savings'],
+    [row.prices.sameDay, 'same_day'],
+  ];
+  for (const [price, expectedChannel] of nonApplicableEvidence) {
+    if (!isCanonicalNotApplicableReportPrice(price, expectedChannel)) {
       throw new TypeError(
         'Costco.com report evidence outside the Costco.com channel must be not_applicable.',
       );
     }
   }
-  if (usableExactPrice(row.prices.costcoCom, 'costco_com')) {
+  if (
+    row.sameDayWarehouseEstimateCents !== null ||
+    row.sameDayEstimatedDeltaCents !== null ||
+    row.warehouseDeltaCents !== null
+  ) {
+    throw new TypeError(
+      'A Costco.com report row cannot contain warehouse or Same-Day derived values.',
+    );
+  }
+  if (isUsableOnlinePriceEvidence(row.prices.costcoCom)) {
     validateComparison(row, 'costco_com', row.prices.costcoCom.unitPriceCents);
   } else {
     validateUnavailableComparison(row, 'Costco.com');
@@ -536,11 +568,11 @@ function validateOnlineRow(row: FullReportRow): void {
 }
 
 function validateWarehouseRow(row: FullReportRow): void {
-  if (usableExactPrice(row.prices.warehouse, 'warehouse')) {
+  if (isUsableReportPriceEvidence(row.prices.warehouse, 'warehouse')) {
     validateComparison(row, 'warehouse', row.prices.warehouse.unitPriceCents);
   } else if (row.status === 'estimated_opportunity') {
     if (
-      !usableExactPrice(row.prices.sameDay, 'same_day') ||
+      !isUsableReportPriceEvidence(row.prices.sameDay, 'same_day') ||
       row.sameDayWarehouseEstimateCents === null ||
       row.sameDayEstimatedDeltaCents === null ||
       row.sameDayEstimatedDeltaCents <= 0
@@ -549,7 +581,29 @@ function validateWarehouseRow(row: FullReportRow): void {
         'An estimated opportunity requires no verified warehouse price and a positive Same-Day estimated delta.',
       );
     }
-    validateComparison(row, 'same_day', row.sameDayWarehouseEstimateCents);
+    if (
+      !Number.isFinite(row.sameDayMarkupPercent) ||
+      row.sameDayMarkupPercent <= 0 ||
+      row.sameDayMarkupPercent >= 100
+    ) {
+      throw new TypeError(
+        'A Same-Day estimate requires a valid markup percentage.',
+      );
+    }
+    const derivedEstimateCents = inverseMarkupCents(
+      row.prices.sameDay.unitPriceCents,
+      row.sameDayMarkupPercent,
+    );
+    if (
+      !Number.isSafeInteger(derivedEstimateCents) ||
+      derivedEstimateCents <= 0 ||
+      row.sameDayWarehouseEstimateCents !== derivedEstimateCents
+    ) {
+      throw new TypeError(
+        'A Same-Day estimate must equal the inverse-markup result derived from Same-Day evidence.',
+      );
+    }
+    validateComparison(row, 'same_day', derivedEstimateCents);
     if (row.comparisonDeltaCents !== row.sameDayEstimatedDeltaCents) {
       throw new TypeError(
         'A Same-Day report comparison must match its estimated delta.',
@@ -627,25 +681,4 @@ function validateUnavailableComparison(
       `An unavailable ${purchaseLabel} comparison requires null comparison fields.`,
     );
   }
-}
-
-function usableExactPrice(
-  price: ReportPriceObservation,
-  channel: 'warehouse' | 'costco_com' | 'same_day',
-): price is ReportPriceObservation & {
-  readonly observedAt: string;
-  readonly source: string;
-  readonly unitPriceCents: number;
-} {
-  return (
-    price.channel === channel &&
-    price.unavailableReason === null &&
-    price.observedAt !== null &&
-    Number.isFinite(Date.parse(price.observedAt)) &&
-    price.source !== null &&
-    price.source.length > 0 &&
-    price.unitPriceCents !== null &&
-    Number.isSafeInteger(price.unitPriceCents) &&
-    price.unitPriceCents > 0
-  );
 }

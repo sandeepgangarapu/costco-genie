@@ -1,11 +1,11 @@
 import type { AppConfig } from '../config/config.js';
 import { selectAlerts, type AlertSelection } from '../core/alert-policy.js';
-import {
-  findAdjustments,
-  findOnlineAdjustments,
-  isUsableOnlinePrice,
-} from '../core/matcher.js';
+import { findAdjustments, findOnlineAdjustments } from '../core/matcher.js';
 import { normalizeReceipts } from '../core/normalize-receipts.js';
+import {
+  isUsableOnlinePriceEvidence,
+  isUsableReportPriceEvidence,
+} from '../core/price-evidence.js';
 import { buildReportRows } from '../core/report-rows.js';
 import type { CostcoTokens } from '../costco/browser-session.js';
 import { AuthRequiredError } from '../costco/errors.js';
@@ -371,7 +371,10 @@ async function executeBegunRun(
         };
         observations = priceEvidence.items
           .filter((item) => item.purchaseChannel === 'warehouse')
-          .map((item) => toWarehouseObservation(item, startedAt));
+          .flatMap((item) => {
+            const observation = toWarehouseObservation(item);
+            return observation === null ? [] : [observation];
+          });
       } else {
         const warehouseRequests = requests.filter(
           (request) => request.purchaseChannel === 'warehouse',
@@ -456,9 +459,10 @@ async function executeBegunRun(
       emailSelections,
       deliveredPurchaseIds,
     );
-    const warehouseUnresolvedPrices = observations.filter(
-      (observation) => observation.unresolvedReason !== null,
-    ).length;
+    const warehouseUnresolvedPrices = warehouseUnresolvedPriceCount(
+      requests,
+      priceEvidence,
+    );
     const onlineUnresolvedPrices = onlineUnresolvedPriceCount(
       requests,
       priceEvidence,
@@ -470,8 +474,10 @@ async function executeBegunRun(
       ) ||
       priceEvidence.items.some(
         (item) =>
-          item.purchaseChannel === 'costco_com' &&
-          item.prices.costcoCom.unavailableReason === 'batch_failed',
+          (item.purchaseChannel === 'warehouse' &&
+            item.prices.warehouse.unavailableReason === 'batch_failed') ||
+          (item.purchaseChannel === 'costco_com' &&
+            item.prices.costcoCom.unavailableReason === 'batch_failed'),
       );
     const hasSourceFailure = priceEvidence.diagnostics.some(
       (diagnostic) => diagnostic.status === 'error',
@@ -598,8 +604,10 @@ function fullReportRows(
     const prices: ReportPriceChannels = {
       warehouse: isOnline
         ? unavailableReportPrice('warehouse', 'not_applicable')
-        : (currentEvidence?.warehouse ??
-          reportWarehouseObservation(row.warehousePrice)),
+        : canonicalWarehouseReportPrice(
+            currentEvidence?.warehouse,
+            reportWarehouseObservation(row.warehousePrice),
+          ),
       receiptHistory: isOnline
         ? unavailableReportPrice('receipt_history', 'not_applicable')
         : laterReceiptEvidence(row.purchase, purchases),
@@ -615,7 +623,10 @@ function fullReportRows(
         : (currentEvidence?.sameDay ??
           unavailableReportPrice('same_day', 'source_not_configured')),
     };
-    const sameDayWarehouseEstimateCents = usableReportPrice(prices.sameDay)
+    const sameDayWarehouseEstimateCents = isUsableReportPriceEvidence(
+      prices.sameDay,
+      'same_day',
+    )
       ? inverseMarkupCents(
           prices.sameDay.unitPriceCents,
           config.sameDayMarkupPercent,
@@ -628,7 +639,7 @@ function fullReportRows(
     const estimatedOpportunity =
       !isOnline &&
       row.status !== 'candidate' &&
-      !usableReportPrice(prices.warehouse) &&
+      !isUsableReportPriceEvidence(prices.warehouse, 'warehouse') &&
       row.daysRemaining !== null &&
       ![
         'invalid_config',
@@ -690,7 +701,7 @@ function reportComparison(
   | 'potentialSavingsCents'
 > {
   if (purchase.purchaseChannel === 'costco_com') {
-    return isUsableOnlinePrice(prices.costcoCom)
+    return isUsableOnlinePriceEvidence(prices.costcoCom)
       ? comparisonValues(
           purchase,
           'costco_com',
@@ -698,7 +709,7 @@ function reportComparison(
         )
       : unavailableComparison();
   }
-  if (usableReportPrice(prices.warehouse)) {
+  if (isUsableReportPriceEvidence(prices.warehouse, 'warehouse')) {
     return comparisonValues(
       purchase,
       'warehouse',
@@ -789,7 +800,7 @@ function onlineReportStatus(
   if (candidatePurchaseIds.has(row.purchase.id)) {
     return { reason: null, status: 'candidate' };
   }
-  if (!isUsableOnlinePrice(price)) {
+  if (!isUsableOnlinePriceEvidence(price)) {
     return { reason: 'costco_com_price_unavailable', status: 'not_eligible' };
   }
   return {
@@ -799,25 +810,6 @@ function onlineReportStatus(
         : 'below_savings_threshold',
     status: 'not_eligible',
   };
-}
-
-function usableReportPrice(
-  price: ReportPriceObservation,
-): price is ReportPriceObservation & {
-  readonly observedAt: string;
-  readonly source: string;
-  readonly unitPriceCents: number;
-} {
-  return (
-    price.unitPriceCents !== null &&
-    price.unitPriceCents > 0 &&
-    Number.isSafeInteger(price.unitPriceCents) &&
-    price.unavailableReason === null &&
-    price.source !== null &&
-    price.source.length > 0 &&
-    price.observedAt !== null &&
-    Number.isFinite(Date.parse(price.observedAt))
-  );
 }
 
 function estimatedCandidates(
@@ -926,28 +918,31 @@ function fallbackPriceEvidence(
 
 function toWarehouseObservation(
   item: ReportPriceEvidenceResult['items'][number],
-  fallbackObservedAt: string,
-): PriceObservation {
+): PriceObservation | null {
   const price = item.prices.warehouse;
-  if (!usableReportPrice(price)) {
-    return {
-      itemNumber: item.itemNumber,
-      warehouseNumber: item.warehouseNumber,
-      observedAt: price.observedAt ?? fallbackObservedAt,
-      source: price.source ?? 'price_sources',
-      unitPriceCents: null,
-      unresolvedReason:
-        price.unavailableReason ?? 'invalid_warehouse_price_evidence',
-    };
-  }
+  if (!isUsableReportPriceEvidence(price, 'warehouse')) return null;
   return {
     itemNumber: item.itemNumber,
     warehouseNumber: item.warehouseNumber,
-    observedAt: price.observedAt ?? fallbackObservedAt,
-    source: price.source ?? 'price_sources',
+    observedAt: price.observedAt,
+    source: price.source,
     unitPriceCents: price.unitPriceCents,
-    unresolvedReason: price.unavailableReason,
+    unresolvedReason: null,
   };
+}
+
+function canonicalWarehouseReportPrice(
+  price: ReportPriceObservation | undefined,
+  fallback: ReportPriceObservation,
+): ReportPriceObservation {
+  if (price === undefined) return fallback;
+  if (isUsableReportPriceEvidence(price, 'warehouse')) return price;
+  return unavailableReportPrice(
+    'warehouse',
+    price.channel === 'warehouse' && price.unavailableReason !== null
+      ? price.unavailableReason
+      : 'invalid_warehouse_price_evidence',
+  );
 }
 
 function reportWarehouseObservation(
@@ -1019,7 +1014,26 @@ function onlineUnresolvedPriceCount(
   return requests.filter((request) => {
     if (request.purchaseChannel !== 'costco_com') return false;
     const item = evidenceByKey.get(priceKey(request));
-    return item === undefined || !isUsableOnlinePrice(item.prices.costcoCom);
+    return (
+      item === undefined || !isUsableOnlinePriceEvidence(item.prices.costcoCom)
+    );
+  }).length;
+}
+
+function warehouseUnresolvedPriceCount(
+  requests: readonly PriceRequest[],
+  evidence: ReportPriceEvidenceResult,
+): number {
+  const evidenceByKey = new Map(
+    evidence.items.map((item) => [priceKey(item), item]),
+  );
+  return requests.filter((request) => {
+    if (request.purchaseChannel !== 'warehouse') return false;
+    const item = evidenceByKey.get(priceKey(request));
+    return (
+      item === undefined ||
+      !isUsableReportPriceEvidence(item.prices.warehouse, 'warehouse')
+    );
   }).length;
 }
 

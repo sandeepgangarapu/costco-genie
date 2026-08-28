@@ -5,6 +5,12 @@ import type {
   PurchaseChannel,
   ReportPriceChannels,
 } from '../domain/types.js';
+import {
+  isUsableOnlinePriceEvidence,
+  isUsableWarehousePriceObservation,
+} from './price-evidence.js';
+
+export { isUsableOnlinePriceEvidence } from './price-evidence.js';
 
 export interface MatcherConfig {
   readonly adjustmentWindowDays: number;
@@ -54,7 +60,7 @@ export function findAdjustments(
       const observation = latestObservations.get(
         observationKey(purchase.itemNumber, purchase.warehouseNumber),
       );
-      if (!observation || !isUsable(observation)) {
+      if (!observation || !isUsableWarehousePriceObservation(observation)) {
         return [];
       }
 
@@ -95,7 +101,7 @@ export function findOnlineAdjustments(
       );
       if (!evidence) return [];
       const price = evidence.prices.costcoCom;
-      if (!isUsableOnlinePrice(price)) return [];
+      if (!isUsableOnlinePriceEvidence(price)) return [];
 
       const observation: PriceObservation = {
         itemNumber: purchase.itemNumber,
@@ -235,33 +241,6 @@ function latestByItemAndWarehouse(
 
   return new Map(
     [...latest.entries()].map(([key, value]) => [key, value.observation]),
-  );
-}
-
-function isUsable(
-  observation: PriceObservation,
-): observation is PriceObservation & { readonly unitPriceCents: number } {
-  return (
-    observation.unresolvedReason === null &&
-    observation.unitPriceCents !== null &&
-    isSafePositiveInteger(observation.unitPriceCents)
-  );
-}
-
-export function isUsableOnlinePrice(
-  price: ReportPriceChannels['costcoCom'],
-): price is ReportPriceChannels['costcoCom'] & {
-  readonly observedAt: string;
-  readonly source: string;
-  readonly unitPriceCents: number;
-} {
-  return (
-    price.channel === 'costco_com' &&
-    price.unavailableReason === null &&
-    price.observedAt !== null &&
-    parseTimestamp(price.observedAt) !== null &&
-    price.source !== null &&
-    isSafePositiveInteger(price.unitPriceCents ?? 0)
   );
 }
 

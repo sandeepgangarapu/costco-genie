@@ -1502,12 +1502,129 @@ describe('runPriceCheck', () => {
 
     const summary = await runPriceCheck(deps, { now: () => NOW });
 
-    expect(summary.candidatesFound).toBe(0);
+    expect(summary).toMatchObject({
+      alertsSent: 0,
+      candidatesFound: 0,
+      unresolvedPrices: 1,
+      warehouseUnresolvedPrices: 1,
+    });
+    expect(deps.localNotifier.messages).toEqual([]);
+    expect(deps.mailNotifier.messages).toEqual([]);
     expect(reports[0]?.rows[0]).toMatchObject({
       comparisonChannel: null,
       comparisonDeltaCents: null,
       comparisonUnitCents: null,
       potentialSavingsCents: null,
+      status: 'not_eligible',
+    });
+    deps.database.close();
+  });
+
+  it('rejects a Costco.com-channel value in the warehouse evidence slot before notification', async () => {
+    const reports: FullRunReport[] = [];
+    const deps = dependencies({
+      fetchEvidence: async (requests) => ({
+        diagnostics: [],
+        items: requests.map((request) => ({
+          ...request,
+          prices: {
+            warehouse: {
+              ...availableReportPrice('warehouse', 799),
+              channel: 'costco_com',
+            },
+            warehouseSavings: unavailableReportPrice('warehouse_savings'),
+            costcoCom: availableReportPrice('costco_com', 100),
+            sameDay: unavailableReportPrice('same_day'),
+          },
+        })),
+      }),
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/warehouse-crossover.html',
+          csvFile: '/reports/warehouse-crossover.csv',
+          jsonFile: '/reports/warehouse-crossover.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary).toMatchObject({
+      alertsSent: 0,
+      candidatesFound: 0,
+      unresolvedPrices: 1,
+      warehouseUnresolvedPrices: 1,
+    });
+    expect(deps.localNotifier.messages).toEqual([]);
+    expect(deps.mailNotifier.messages).toEqual([]);
+    expect(reports[0]?.rows[0]).toMatchObject({
+      comparisonChannel: null,
+      prices: {
+        warehouse: {
+          channel: 'warehouse',
+          unavailableReason: 'invalid_warehouse_price_evidence',
+          unitPriceCents: null,
+        },
+      },
+      status: 'not_eligible',
+    });
+    deps.database.close();
+  });
+
+  it('rejects blank Costco.com provenance before notification', async () => {
+    const reports: FullRunReport[] = [];
+    const deps = dependencies({
+      fetchEvidence: async (requests) => ({
+        diagnostics: [],
+        items: requests.map((request) => ({
+          ...request,
+          prices: {
+            warehouse: unavailableReportPrice('warehouse'),
+            warehouseSavings: unavailableReportPrice('warehouse_savings'),
+            costcoCom: {
+              ...availableReportPrice('costco_com', 1_500),
+              source: '   ',
+            },
+            sameDay: unavailableReportPrice('same_day'),
+          },
+        })),
+      }),
+      fetchOnlineOrders: async () => ({
+        diagnostic: {
+          channel: null,
+          message: 'Costco.com order import completed with 1 purchase.',
+          observedAt: NOW.toISOString(),
+          source: 'costco_online_orders',
+          status: 'ok',
+        },
+        failedDetailBatches: 0,
+        purchases: [ONLINE_PURCHASE],
+      }),
+      fetchReceipts: async () => [],
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/blank-online-source.html',
+          csvFile: '/reports/blank-online-source.csv',
+          jsonFile: '/reports/blank-online-source.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary).toMatchObject({
+      alertsSent: 0,
+      candidatesFound: 0,
+      onlineUnresolvedPrices: 1,
+      unresolvedPrices: 1,
+    });
+    expect(deps.localNotifier.messages).toEqual([]);
+    expect(deps.mailNotifier.messages).toEqual([]);
+    expect(reports[0]?.rows[0]).toMatchObject({
+      comparisonChannel: null,
+      reason: 'costco_com_price_unavailable',
       status: 'not_eligible',
     });
     deps.database.close();
