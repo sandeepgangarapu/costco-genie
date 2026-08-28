@@ -230,7 +230,11 @@ describe('createDefaultCliActions composition', () => {
       startDate: '2030-07-14',
     });
     expect(priceRequests).toEqual([
-      { itemNumber: '100978861', warehouseNumber: '129' },
+      {
+        description: 'Composed item',
+        itemNumber: '100978861',
+        warehouseNumber: '129',
+      },
     ]);
     expect(lockPath).toBe(
       join(homeDirectory, '.costco-price-matcher', 'run.lock'),

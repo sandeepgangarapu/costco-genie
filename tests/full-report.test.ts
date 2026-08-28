@@ -60,9 +60,8 @@ describe('writeFullReport', () => {
     const html = readFileSync(files.htmlFile, 'utf8');
     expect(html).toContain('<!doctype html>');
     expect(html).toContain('<caption>Purchase-line price comparison</caption>');
-    expect(html).toContain(
-      '1 purchase line — Warehouse: $14.99 · Historical receipt: $15.99 · Warehouse Savings: $14.49 · Costco.com: $17.99 · Same-Day: Unavailable — not_available',
-    );
+    expect(html).not.toContain('Unique item summary');
+    expect(html).not.toContain('1 purchase line — Warehouse:');
     expect(html).toContain('Warehouse Savings');
     expect(html).toContain('Costco.com');
     expect(html).toContain('Same-Day');

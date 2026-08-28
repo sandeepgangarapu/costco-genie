@@ -5,8 +5,15 @@ import { parseMoneyToCents } from '../lib/money.js';
 
 const SAME_DAY_SEARCH_URL = 'https://sameday.costco.com/store/costco/s';
 const DEFAULT_TIMEOUT_MILLISECONDS = 30_000;
+const RESULT_WAIT_MILLISECONDS = 10_000;
+const DETAIL_WAIT_MILLISECONDS = 5_000;
+const GENUINE_RESULT_SELECTOR =
+  '[role="region"][aria-label^="Results for"] ul:not([role="presentation"]) > li > [data-item-card="true"] [data-item-card-button="true"]';
+const PRODUCT_DETAIL_BACK_SELECTOR =
+  '[role="dialog"][aria-label="item details"] #item_details > div:first-child button';
 
 export interface SameDayPriceRequest {
+  readonly description?: string;
   readonly itemNumber: string;
   readonly warehouseNumber: string;
 }
@@ -73,29 +80,29 @@ export async function fetchSameDayPrices(
   const configuredSource = sourceForPostalCode(postalCode);
   const unconfirmedSource = 'same_day_guest_storefront_location_unconfirmed';
   const timeout = validTimeout(options.timeout);
-  const deadline = createDeadline(timeout, options.nowMilliseconds);
+  const setupDeadline = createDeadline(timeout, options.nowMilliseconds);
   const launchBrowser = options.launchBrowser ?? launchPlaywrightBrowser;
   let browser: SameDayBrowser | null = null;
   let page: SameDayPage | null = null;
 
   try {
-    browser = await withinDeadline(launchBrowser, deadline);
-    page = await withinDeadline(() => browser!.newPage(), deadline);
+    browser = await withinDeadline(launchBrowser, setupDeadline);
+    page = await withinDeadline(() => browser!.newPage(), setupDeadline);
     if (postalCode !== null) {
       await withinDeadline(
         () =>
           page!.goto(SAME_DAY_SEARCH_URL, {
-            timeout: remainingMilliseconds(deadline),
+            timeout: remainingMilliseconds(setupDeadline),
             waitUntil: 'domcontentloaded',
           }),
-        deadline,
+        setupDeadline,
       );
-      await browseAsGuestIfPrompted(page, deadline);
+      await browseAsGuestIfPrompted(page, setupDeadline);
       const confirmed = await configureDeliveryLocation(
         page,
         options.deliveryAddress,
         postalCode,
-        deadline,
+        setupDeadline,
       );
       if (!confirmed) {
         return requests.map((request) =>
@@ -110,13 +117,14 @@ export async function fetchSameDayPrices(
     }
     const observations: SameDayPriceObservation[] = [];
     for (const [index, request] of requests.entries()) {
+      const itemDeadline = createDeadline(timeout, options.nowMilliseconds);
       observations.push(
         await lookupItem(
           page,
           request,
           observedAt,
           configuredSource,
-          deadline,
+          itemDeadline,
           postalCode === null && index === 0,
         ),
       );
@@ -150,51 +158,39 @@ async function lookupItem(
   browseAsGuest: boolean,
 ): Promise<SameDayPriceObservation> {
   try {
-    await withinDeadline(
-      () =>
-        page.goto(searchUrl(request.itemNumber), {
-          timeout: remainingMilliseconds(deadline),
-          waitUntil: 'domcontentloaded',
-        }),
-      deadline,
-    );
-    if (browseAsGuest) await browseAsGuestIfPrompted(page, deadline);
-    await waitForResults(page, deadline);
-    const exactProductOpened = await openExactProduct(
-      page,
-      request.itemNumber,
-      deadline,
-    );
-    if (!exactProductOpened) {
-      return unavailable(request, observedAt, source, 'exact_item_not_found');
-    }
-    const text = await withinDeadline(
-      () => page.locator('body').innerText(),
-      deadline,
-    );
-    const priceCents = exactItemPriceCents(text, request.itemNumber);
-    if (priceCents === undefined) {
-      return unavailable(request, observedAt, source, 'exact_item_not_found');
-    }
-    if (priceCents === null) {
-      return unavailable(
-        request,
-        observedAt,
-        source,
-        'current_price_unavailable',
+    const searchTerms = [request.itemNumber, request.description?.trim()]
+      .filter((value): value is string => Boolean(value))
+      .filter((value, index, values) => values.indexOf(value) === index);
+    for (const [index, searchTerm] of searchTerms.entries()) {
+      const priceCents = await lookupSearchTerm(
+        page,
+        request.itemNumber,
+        searchTerm,
+        deadline,
+        browseAsGuest && index === 0,
       );
-    }
+      if (priceCents === undefined) continue;
+      if (priceCents === null) {
+        return unavailable(
+          request,
+          observedAt,
+          source,
+          'current_price_unavailable',
+        );
+      }
 
-    return {
-      channel: 'same_day',
-      itemNumber: request.itemNumber,
-      observedAt,
-      promotionText: null,
-      source,
-      unavailableReason: null,
-      unitPriceCents: priceCents,
-      warehouseNumber: request.warehouseNumber,
-    };
+      return {
+        channel: 'same_day',
+        itemNumber: request.itemNumber,
+        observedAt,
+        promotionText: null,
+        source,
+        unavailableReason: null,
+        unitPriceCents: priceCents,
+        warehouseNumber: request.warehouseNumber,
+      };
+    }
+    return unavailable(request, observedAt, source, 'exact_item_not_found');
   } catch (error) {
     return unavailable(
       request,
@@ -207,12 +203,32 @@ async function lookupItem(
   }
 }
 
+async function lookupSearchTerm(
+  page: SameDayPage,
+  itemNumber: string,
+  searchTerm: string,
+  deadline: Deadline,
+  browseAsGuest: boolean,
+): Promise<number | null | undefined> {
+  await withinDeadline(
+    () =>
+      page.goto(searchUrl(searchTerm), {
+        timeout: remainingMilliseconds(deadline),
+        waitUntil: 'domcontentloaded',
+      }),
+    deadline,
+  );
+  if (browseAsGuest) await browseAsGuestIfPrompted(page, deadline);
+  if (!(await waitForResults(page, deadline))) return undefined;
+  return findExactProductPrice(page, itemNumber, deadline);
+}
+
 async function launchPlaywrightBrowser(): Promise<SameDayBrowser> {
   return chromium.launch({ headless: true });
 }
 
-function searchUrl(itemNumber: string): string {
-  return `${SAME_DAY_SEARCH_URL}?k=${encodeURIComponent(itemNumber)}`;
+function searchUrl(searchTerm: string): string {
+  return `${SAME_DAY_SEARCH_URL}?k=${encodeURIComponent(searchTerm)}`;
 }
 
 async function browseAsGuestIfPrompted(
@@ -228,43 +244,82 @@ async function browseAsGuestIfPrompted(
 async function waitForResults(
   page: SameDayPage,
   deadline: Deadline,
-): Promise<void> {
-  await page.locator('text=/Results for/i').waitFor({
-    state: 'visible',
-    timeout: remainingMilliseconds(deadline),
-  });
+): Promise<boolean> {
+  const timeout = remainingMilliseconds(deadline);
+  return Promise.any([
+    page
+      .locator('text=/Results for/i')
+      .waitFor({
+        state: 'visible',
+        timeout,
+      })
+      .then(() => true),
+    page
+      .locator('text=/Sorry, we don.t see any items at Costco that match/i')
+      .waitFor({ state: 'visible', timeout })
+      .then(() => false),
+  ]);
 }
 
-async function openExactProduct(
+async function findExactProductPrice(
   page: SameDayPage,
   itemNumber: string,
   deadline: Deadline,
+): Promise<number | null | undefined> {
+  const products = page.locator(GENUINE_RESULT_SELECTOR);
+  if (
+    !(await waitForVisible(products.nth(0), deadline, RESULT_WAIT_MILLISECONDS))
+  ) {
+    throw new Error('Same-Day result cards did not become visible');
+  }
+  const count = await withinDeadline(() => products.count(), deadline);
+  for (let index = 0; index < count; index += 1) {
+    await withinDeadline(() => products.nth(index).click(), deadline);
+    const detail = page.locator('text=/Item:\\s*\\d+(?:\\D|$)/i');
+    if (!(await waitForVisible(detail, deadline, DETAIL_WAIT_MILLISECONDS))) {
+      throw new Error('Same-Day product detail did not become visible');
+    }
+    const text = await withinDeadline(
+      () => page.locator('body').innerText(),
+      deadline,
+    );
+    const priceCents = exactItemPriceCents(text, itemNumber);
+    if (priceCents !== undefined) return priceCents;
+    if (index < count - 1) await returnToResults(page, deadline);
+  }
+  return undefined;
+}
+
+async function waitForVisible(
+  locator: SameDayLocator,
+  deadline: Deadline,
+  timeout: number,
 ): Promise<boolean> {
-  const products = page.locator('[data-item-card-button="true"]');
   const remaining = remainingMilliseconds(deadline);
-  const productWaitUsesWholeDeadline = remaining <= 10_000;
+  const waitUsesWholeDeadline = remaining <= timeout;
   try {
-    await products.waitFor({
+    await locator.waitFor({
       state: 'visible',
-      timeout: Math.min(10_000, remaining),
+      timeout: Math.min(timeout, remaining),
     });
+    return true;
   } catch {
-    if (productWaitUsesWholeDeadline || deadline.now() >= deadline.endsAt) {
+    if (waitUsesWholeDeadline || deadline.now() >= deadline.endsAt) {
       throw new SameDayDeadlineError();
     }
     return false;
   }
-  if ((await withinDeadline(() => products.count(), deadline)) !== 1) {
-    return false;
-  }
-  await withinDeadline(() => products.click(), deadline);
-  await page
-    .locator(`text=/Item:\\s*${escapeRegex(itemNumber)}(?:\\D|$)/i`)
-    .waitFor({
-      state: 'visible',
-      timeout: remainingMilliseconds(deadline),
-    });
-  return true;
+}
+
+async function returnToResults(
+  page: SameDayPage,
+  deadline: Deadline,
+): Promise<void> {
+  await withinDeadline(
+    () => page.locator(PRODUCT_DETAIL_BACK_SELECTOR).click(),
+    deadline,
+  );
+  await waitForResults(page, deadline);
 }
 
 async function configureDeliveryLocation(

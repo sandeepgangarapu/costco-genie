@@ -68,10 +68,19 @@ function pageWithSearches(
           waitFor: async () => events.push('results:wait'),
         });
       }
-      if (selector === '[data-item-card-button="true"]') {
+      if (
+        selector === '[data-item-card-button="true"]' ||
+        (selector.includes('[role="region"]') &&
+          selector.includes('[data-item-card-button="true"]'))
+      ) {
         return locator({
           click: async () => events.push('product:click'),
           count: async () => 1,
+          nth: () =>
+            locator({
+              click: async () => events.push('product:click'),
+              waitFor: async () => events.push('product:wait'),
+            }),
           waitFor: async () => events.push('product:wait'),
         });
       }
@@ -125,6 +134,142 @@ function pageWithSearches(
   };
 }
 
+interface CandidateSearch {
+  readonly candidates: readonly string[];
+  readonly detailWaitFails?: boolean;
+  readonly noResults?: boolean;
+  readonly productWaitFails?: boolean;
+  readonly sponsoredCards?: number;
+}
+
+function pageWithCandidateSearches(
+  searches: readonly CandidateSearch[],
+  events: string[],
+): SameDayPage {
+  let searchIndex = -1;
+  let selectedCandidate = -1;
+
+  const currentSearch = () => searches[searchIndex] ?? { candidates: [] };
+  const productLocator = (genuineOnly: boolean): SameDayLocator =>
+    locator({
+      click: async () => {
+        selectedCandidate = 0;
+        events.push('product:0:click');
+      },
+      count: async () =>
+        currentSearch().candidates.length +
+        (genuineOnly ? 0 : (currentSearch().sponsoredCards ?? 0)),
+      nth: (index) =>
+        locator({
+          click: async () => {
+            selectedCandidate = index;
+            events.push(`product:${String(index)}:click`);
+          },
+          waitFor: async () => {
+            events.push(`product:${String(index)}:wait`);
+            if (currentSearch().productWaitFails) {
+              throw new Error('genuine product cards did not become visible');
+            }
+          },
+        }),
+      waitFor: async () => {
+        events.push('product:wait');
+        if (
+          currentSearch().candidates.length +
+            (genuineOnly ? 0 : (currentSearch().sponsoredCards ?? 0)) >
+          1
+        ) {
+          throw new Error('strict mode violation for multiple product cards');
+        }
+      },
+    });
+
+  return {
+    async close() {
+      events.push('page:close');
+    },
+    async goto(url) {
+      events.push(`goto:${url}`);
+      if (url.includes('?k=')) {
+        searchIndex += 1;
+        selectedCandidate = -1;
+      }
+    },
+    locator(selector) {
+      if (selector === 'body') {
+        return locator({
+          innerText: async () =>
+            currentSearch().candidates[selectedCandidate] ?? '',
+        });
+      }
+      if (selector === 'button:has-text("Browse as a guest")') {
+        return locator({ count: async () => 0 });
+      }
+      if (selector === 'text=/Results for/i') {
+        return locator({
+          waitFor: async () => {
+            events.push('results:wait');
+            if (currentSearch().noResults) {
+              throw new Error('result heading is absent');
+            }
+          },
+        });
+      }
+      if (selector.includes('Sorry, we don')) {
+        return locator({
+          waitFor: async () => {
+            events.push('no-results:wait');
+            if (!currentSearch().noResults) {
+              throw new Error('no-results message is absent');
+            }
+          },
+        });
+      }
+      if (selector === '[data-item-card-button="true"]') {
+        events.push('products:broad-selector');
+        return productLocator(false);
+      }
+      if (
+        selector.includes('[role="region"]') &&
+        selector.includes('[data-item-card-button="true"]')
+      ) {
+        events.push('products:genuine-selector');
+        return productLocator(true);
+      }
+      if (selector.startsWith('text=/Item:')) {
+        return locator({
+          waitFor: async () => {
+            events.push('item:wait');
+            if (currentSearch().detailWaitFails) {
+              throw new Error('product detail did not become visible');
+            }
+          },
+        });
+      }
+      if (selector === 'button:has-text("Back")') {
+        return locator({
+          click: async () => {
+            events.push('header-back:click');
+            throw new Error('product modal intercepts the header back control');
+          },
+        });
+      }
+      if (
+        selector ===
+        '[role="dialog"][aria-label="item details"] #item_details > div:first-child button'
+      ) {
+        return locator({
+          click: async () => {
+            selectedCandidate = -1;
+            events.push('back:click');
+          },
+        });
+      }
+      return locator();
+    },
+  };
+}
+
 function browserWithPages(
   pages: Array<SameDayPage | Error>,
   events: string[],
@@ -150,6 +295,156 @@ describe('inverseMarkupCents', () => {
 });
 
 describe('fetchSameDayPrices', () => {
+  it('ignores sponsored cards and opens the single genuine item-number result', async () => {
+    const events: string[] = [];
+    const browser = browserWithPages(
+      [
+        pageWithCandidateSearches(
+          [
+            {
+              candidates: [
+                'Veggies Made Great Frittatas\nItem: 1284156\nCurrent price: $15.88',
+              ],
+              sponsoredCards: 2,
+            },
+          ],
+          events,
+        ),
+      ],
+      events,
+    );
+
+    const [price] = await fetchSameDayPrices(
+      [{ itemNumber: '1284156', warehouseNumber: '110' }],
+      { launchBrowser: async () => browser, now: () => new Date(observedAt) },
+    );
+
+    expect(price).toMatchObject({
+      itemNumber: '1284156',
+      unavailableReason: null,
+      unitPriceCents: 1_588,
+    });
+    expect(events).toContain('products:genuine-selector');
+    expect(events).not.toContain('products:broad-selector');
+  });
+
+  it('falls back to the receipt description and verifies the exact item number before accepting a price', async () => {
+    const events: string[] = [];
+    const browser = browserWithPages(
+      [
+        pageWithCandidateSearches(
+          [
+            { candidates: [], noResults: true },
+            {
+              candidates: [
+                'Item: 100001\nCurrent price: $24.96',
+                'Item: 100002\nCurrent price: $32.90',
+                'Item: 100003\nCurrent price: $38.58',
+                'Item: 100004\nCurrent price: $38.58',
+                'Kirkland Signature Organic Extra Virgin Olive Oil\nItem: 692731\nCurrent price: $19.17',
+              ],
+            },
+          ],
+          events,
+        ),
+      ],
+      events,
+    );
+    const request = {
+      description: 'KS ORG EVOO',
+      itemNumber: '692731',
+      warehouseNumber: '110',
+    };
+
+    const [price] = await fetchSameDayPrices([request], {
+      launchBrowser: async () => browser,
+      now: () => new Date(observedAt),
+    });
+
+    expect(price).toMatchObject({
+      itemNumber: '692731',
+      unavailableReason: null,
+      unitPriceCents: 1_917,
+    });
+    expect(events).toContain(
+      'goto:https://sameday.costco.com/store/costco/s?k=KS%20ORG%20EVOO',
+    );
+    expect(events).toContain('back:click');
+    expect(events).not.toContain('header-back:click');
+  });
+
+  it('does not use the description fallback when genuine result cards fail to load', async () => {
+    const events: string[] = [];
+    const browser = browserWithPages(
+      [
+        pageWithCandidateSearches(
+          [
+            { candidates: ['Item: 692731'], productWaitFails: true },
+            {
+              candidates: [
+                'Kirkland Signature Organic Extra Virgin Olive Oil\nItem: 692731\nCurrent price: $19.17',
+              ],
+            },
+          ],
+          events,
+        ),
+      ],
+      events,
+    );
+
+    const [price] = await fetchSameDayPrices(
+      [
+        {
+          description: 'KS ORG EVOO',
+          itemNumber: '692731',
+          warehouseNumber: '110',
+        },
+      ],
+      { launchBrowser: async () => browser, now: () => new Date(observedAt) },
+    );
+
+    expect(price?.unavailableReason).toBe('search_failed');
+    expect(events).not.toContain(
+      'goto:https://sameday.costco.com/store/costco/s?k=KS%20ORG%20EVOO',
+    );
+  });
+
+  it('does not use the description fallback when a product detail fails to load', async () => {
+    const events: string[] = [];
+    const browser = browserWithPages(
+      [
+        pageWithCandidateSearches(
+          [
+            { candidates: ['Item: 692731'], detailWaitFails: true },
+            {
+              candidates: [
+                'Kirkland Signature Organic Extra Virgin Olive Oil\nItem: 692731\nCurrent price: $19.17',
+              ],
+            },
+          ],
+          events,
+        ),
+      ],
+      events,
+    );
+
+    const [price] = await fetchSameDayPrices(
+      [
+        {
+          description: 'KS ORG EVOO',
+          itemNumber: '692731',
+          warehouseNumber: '110',
+        },
+      ],
+      { launchBrowser: async () => browser, now: () => new Date(observedAt) },
+    );
+
+    expect(price?.unavailableReason).toBe('search_failed');
+    expect(events).not.toContain(
+      'goto:https://sameday.costco.com/store/costco/s?k=KS%20ORG%20EVOO',
+    );
+  });
+
   it('confirms the ZIP through its matching address suggestion before returning a price', async () => {
     const events: string[] = [];
     const browser = browserWithPages(
@@ -330,5 +625,51 @@ describe('fetchSameDayPrices', () => {
 
     expect(price).toMatchObject({ unavailableReason: 'deadline_exceeded' });
     expect(events).toContain('browser:close');
+  });
+
+  it('gives each item its own deadline so one stalled lookup does not fail later items', async () => {
+    const events: string[] = [];
+    const basePage = pageWithSearches(
+      [
+        'Item: 1753490\nCurrent price: $15.31',
+        'Item: 1864962\nCurrent price: $18.15',
+      ],
+      events,
+    );
+    let bodyReads = 0;
+    const page: SameDayPage = {
+      ...basePage,
+      locator(selector) {
+        if (selector === 'body') {
+          bodyReads += 1;
+          return locator({
+            innerText:
+              bodyReads === 1
+                ? () => new Promise<string>(() => undefined)
+                : async () => 'Item: 1864962\nCurrent price: $18.15',
+          });
+        }
+        return basePage.locator(selector);
+      },
+    };
+    const browser = browserWithPages([page], events);
+
+    const prices = await fetchSameDayPrices(
+      [
+        { itemNumber: '1753490', warehouseNumber: '110' },
+        { itemNumber: '1864962', warehouseNumber: '110' },
+      ],
+      {
+        launchBrowser: async () => browser,
+        now: () => new Date(observedAt),
+        timeout: 10,
+      },
+    );
+
+    expect(prices.map((price) => price.unavailableReason)).toEqual([
+      'deadline_exceeded',
+      null,
+    ]);
+    expect(prices[1]?.unitPriceCents).toBe(1_815);
   });
 });

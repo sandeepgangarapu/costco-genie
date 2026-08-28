@@ -773,7 +773,11 @@ describe('runPriceCheck', () => {
     const summary = await runPriceCheck(deps, { now: () => NOW });
 
     expect(receivedRequests).toEqual([
-      { itemNumber: '100978861', warehouseNumber: '129' },
+      {
+        description: 'Kirkland Trail Mix',
+        itemNumber: '100978861',
+        warehouseNumber: '129',
+      },
     ]);
     expect(receivedBatchSize).toBe(25);
     expect(summary).toMatchObject({
@@ -815,6 +819,46 @@ describe('runPriceCheck', () => {
       deps.database.getChannelAlertState('email', purchase?.id ?? ''),
     ).toMatchObject({ lastNotifiedPriceCents: 799 });
     expect(deps.database.getLastSuccessfulRun()).toEqual(summary);
+    deps.database.close();
+  });
+
+  it('keeps a usable receipt description when duplicate price requests are collapsed', async () => {
+    let receivedRequests: unknown;
+    const deps = dependencies({
+      fetchPrices: async (requests) => {
+        receivedRequests = requests;
+        return [resolvedObservation('692731', 1_917)];
+      },
+      fetchReceipts: async () => [
+        {
+          ...LIVE_RECEIPT,
+          couponArray: [],
+          itemArray: [
+            {
+              amount: '19.98',
+              itemDescription01: 'KS ORG EVOO',
+              itemNumber: '692731',
+              unit: '1',
+            },
+            {
+              amount: '19.98',
+              itemNumber: '692731',
+              unit: '1',
+            },
+          ],
+        },
+      ],
+    });
+
+    await runPriceCheck(deps, { now: () => NOW });
+
+    expect(receivedRequests).toEqual([
+      {
+        description: 'KS ORG EVOO',
+        itemNumber: '692731',
+        warehouseNumber: '129',
+      },
+    ]);
     deps.database.close();
   });
 

@@ -801,12 +801,19 @@ function addDelivered(
 }
 
 function uniquePriceRequests(
-  purchases: readonly { itemNumber: string; warehouseNumber: string }[],
+  purchases: readonly {
+    description?: string;
+    itemNumber: string;
+    warehouseNumber: string;
+  }[],
 ): WarehousePriceRequest[] {
   const requests = new Map<string, WarehousePriceRequest>();
   for (const purchase of purchases) {
     const key = `${purchase.itemNumber}\u0000${purchase.warehouseNumber}`;
+    const description =
+      purchase.description?.trim() || requests.get(key)?.description;
     requests.set(key, {
+      ...(description === undefined ? {} : { description }),
       itemNumber: purchase.itemNumber,
       warehouseNumber: purchase.warehouseNumber,
     });

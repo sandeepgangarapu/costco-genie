@@ -42,6 +42,7 @@ const catalogProductSchema = z.object({
 });
 
 export interface WarehousePriceRequest {
+  readonly description?: string;
   readonly itemNumber: string;
   readonly warehouseNumber: string;
 }

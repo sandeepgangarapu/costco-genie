@@ -262,12 +262,6 @@ function renderFullReportHtml(report: FullRunReport): string {
         `<li><strong>${escapeHtml(diagnostic.source)}</strong> (${escapeHtml(diagnostic.channel ?? 'run')}, ${escapeHtml(diagnostic.status)}): ${escapeHtml(diagnostic.message)} <time datetime="${escapeHtml(diagnostic.observedAt)}">${escapeHtml(diagnostic.observedAt)}</time></li>`,
     )
     .join('\n');
-  const itemSummary = uniqueItemSummary(report.rows)
-    .map(
-      (item) =>
-        `<li><strong>Item ${escapeHtml(item.itemNumber)}</strong>, warehouse ${escapeHtml(item.warehouseNumber)} — ${String(item.purchaseLines)} purchase ${item.purchaseLines === 1 ? 'line' : 'lines'} — Warehouse: ${summaryPrice(item.prices.warehouse)} · Historical receipt: ${summaryPrice(item.prices.receiptHistory)} · Warehouse Savings: ${summaryPrice(item.prices.warehouseSavings)} · Costco.com: ${summaryPrice(item.prices.costcoCom)} · Same-Day: ${summaryPrice(item.prices.sameDay)}<br><span class="muted">${summarySource('Warehouse', item.prices.warehouse)} · ${summarySource('Historical receipt', item.prices.receiptHistory)} · ${summarySource('Warehouse Savings', item.prices.warehouseSavings)} · ${summarySource('Costco.com', item.prices.costcoCom)} · ${summarySource('Same-Day', item.prices.sameDay)}</span></li>`,
-    )
-    .join('\n');
   const bodyRows = report.rows.map(renderHtmlRow).join('\n');
   const emptyMessage =
     report.rows.length === 0
@@ -304,10 +298,6 @@ function renderFullReportHtml(report: FullRunReport): string {
     <p><strong>Run:</strong> <time datetime="${escapeHtml(report.startedAt)}">${escapeHtml(report.startedAt)}</time> to <time datetime="${escapeHtml(report.finishedAt)}">${escapeHtml(report.finishedAt)}</time></p>
     ${report.diagnostic === null ? '' : `<p><strong>Diagnostic:</strong> ${escapeHtml(report.diagnostic)}</p>`}
   </div>
-  <section class="card" aria-labelledby="unique-items-heading">
-    <h2 id="unique-items-heading">Unique item summary</h2>
-    ${itemSummary === '' ? '<p>No unique items were available.</p>' : `<ul>${itemSummary}</ul>`}
-  </section>
   <section class="card table-wrap" aria-labelledby="purchase-lines-heading">
     <h2 id="purchase-lines-heading">Purchase lines</h2>
     ${emptyMessage}
@@ -381,88 +371,6 @@ function renderHtmlPrice(price: ReportPriceObservation): string {
     .map(escapeHtml)
     .join('<br>');
   return `${formatCents(price.unitPriceCents)}${details === '' ? '' : `<br><span class="muted">${details}</span>`}`;
-}
-
-function uniqueItemSummary(rows: readonly FullReportRow[]): Array<{
-  itemNumber: string;
-  warehouseNumber: string;
-  purchaseLines: number;
-  prices: ReportPriceChannels;
-}> {
-  const items = new Map<
-    string,
-    {
-      itemNumber: string;
-      warehouseNumber: string;
-      purchaseLines: number;
-      prices: ReportPriceChannels;
-    }
-  >();
-  for (const row of rows) {
-    const key = `${row.purchase.itemNumber}\u0000${row.purchase.warehouseNumber}`;
-    const current = items.get(key);
-    if (current) {
-      current.purchaseLines += 1;
-      current.prices = {
-        warehouse: latestReportPrice(
-          current.prices.warehouse,
-          row.prices.warehouse,
-        ),
-        receiptHistory: latestReportPrice(
-          current.prices.receiptHistory,
-          row.prices.receiptHistory,
-        ),
-        warehouseSavings: latestReportPrice(
-          current.prices.warehouseSavings,
-          row.prices.warehouseSavings,
-        ),
-        costcoCom: latestReportPrice(
-          current.prices.costcoCom,
-          row.prices.costcoCom,
-        ),
-        sameDay: latestReportPrice(current.prices.sameDay, row.prices.sameDay),
-      };
-    } else {
-      items.set(key, {
-        itemNumber: row.purchase.itemNumber,
-        warehouseNumber: row.purchase.warehouseNumber,
-        purchaseLines: 1,
-        prices: row.prices,
-      });
-    }
-  }
-  return [...items.values()].sort(
-    (left, right) =>
-      left.itemNumber.localeCompare(right.itemNumber) ||
-      left.warehouseNumber.localeCompare(right.warehouseNumber),
-  );
-}
-
-function latestReportPrice(
-  current: ReportPriceObservation,
-  candidate: ReportPriceObservation,
-): ReportPriceObservation {
-  const currentTime = Date.parse(current.observedAt ?? '');
-  const candidateTime = Date.parse(candidate.observedAt ?? '');
-  if (!Number.isFinite(candidateTime)) return current;
-  if (!Number.isFinite(currentTime) || candidateTime > currentTime) {
-    return candidate;
-  }
-  return current;
-}
-
-function summaryPrice(price: ReportPriceObservation): string {
-  if (price.unitPriceCents !== null) return formatCents(price.unitPriceCents);
-  const unavailable = `Unavailable — ${escapeHtml(price.unavailableReason ?? 'reason unavailable')}`;
-  return price.promotionText === null
-    ? unavailable
-    : `${unavailable}; promotion evidence: ${escapeHtml(price.promotionText)}`;
-}
-
-function summarySource(label: string, price: ReportPriceObservation): string {
-  const source = price.source ?? 'source unavailable';
-  const observedAt = price.observedAt ?? 'time unavailable';
-  return `${escapeHtml(label)}: ${escapeHtml(source)} @ ${escapeHtml(observedAt)}`;
 }
 
 function formatOptionalCents(cents: number | null): string {
