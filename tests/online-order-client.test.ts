@@ -33,18 +33,18 @@ function itemStatus(
       | 'delivered'
       | 'returned'
       | 'shipped',
-      number
+      readonly (number | string)[]
     >
   > = {},
 ) {
+  const entries = (quantities: readonly (number | string)[]) =>
+    quantities.map((quantity) => ({ quantity }));
   return {
-    cancellationRequested: {
-      quantity: overrides.cancellationRequested ?? 0,
-    },
-    cancelled: { quantity: overrides.cancelled ?? 0 },
-    delivered: { quantity: overrides.delivered ?? 2 },
-    returned: { quantity: overrides.returned ?? 0 },
-    shipped: { quantity: overrides.shipped ?? 0 },
+    cancellationRequested: entries(overrides.cancellationRequested ?? []),
+    cancelled: entries(overrides.cancelled ?? []),
+    delivered: entries(overrides.delivered ?? [2]),
+    returned: entries(overrides.returned ?? []),
+    shipped: entries(overrides.shipped ?? []),
   };
 }
 
@@ -61,7 +61,7 @@ function line(overrides: Record<string, unknown> = {}) {
     quantity: 2,
     returnStatus: 'Returnable',
     returnableQuantity: 2,
-    shipment: { pickUpCompletedDate: null },
+    shipment: [],
     totalReturnedQuantity: 0,
     ...overrides,
   };
@@ -322,10 +322,10 @@ describe('fetchOnlineOrderPurchases', () => {
         line(),
         line({
           itemNumber: '100002',
-          itemStatus: itemStatus({ delivered: 0 }),
+          itemStatus: itemStatus({ delivered: [] }),
           lineItemId: 'line-2',
           orderStatus: 'Ready for pickup',
-          shipment: { pickUpCompletedDate: '2026-08-02T10:00:00.000Z' },
+          shipment: [{ pickUpCompletedDate: '2026-08-02T10:00:00.000Z' }],
         }),
       ]),
     ];
@@ -361,9 +361,115 @@ describe('fetchOnlineOrderPurchases', () => {
     );
   });
 
+  it('treats empty live item-status arrays as zero', async () => {
+    const order = listOrder(1);
+    const result = await fetchOnlineOrderPurchases(tokens, startDate, endDate, {
+      fetchFn: successfulFetch(
+        [order],
+        [
+          detailOrder(order.orderNumber, [
+            line({ itemStatus: itemStatus({ delivered: [] }) }),
+          ]),
+        ],
+      ),
+    });
+
+    expect(result.purchases).toHaveLength(1);
+    expect(result.purchases[0]?.quantity).toBe(2);
+  });
+
+  it('sums multiple live entries for every active-quantity status', async () => {
+    const order = listOrder(1);
+    const result = await fetchOnlineOrderPurchases(tokens, startDate, endDate, {
+      fetchFn: successfulFetch(
+        [order],
+        [
+          detailOrder(order.orderNumber, [
+            line({
+              itemStatus: itemStatus({
+                cancelled: [1, 1],
+                delivered: [4, 4],
+                returned: [1, 2],
+              }),
+              quantity: 8,
+              totalReturnedQuantity: 2,
+            }),
+          ]),
+        ],
+      ),
+    });
+
+    expect(result.purchases[0]?.quantity).toBe(3);
+  });
+
+  it('accepts pickup completion in any live shipment entry', async () => {
+    const order = listOrder(1);
+    const result = await fetchOnlineOrderPurchases(tokens, startDate, endDate, {
+      fetchFn: successfulFetch(
+        [order],
+        [
+          detailOrder(order.orderNumber, [
+            line({
+              itemStatus: itemStatus({ delivered: [] }),
+              orderStatus: 'Processing',
+              shipment: [
+                { pickUpCompletedDate: null },
+                { pickUpCompletedDate: '2026-08-02T10:00:00.000Z' },
+              ],
+            }),
+          ]),
+        ],
+      ),
+    });
+
+    expect(result.purchases).toHaveLength(1);
+  });
+
+  it.each([
+    'cancellationRequested',
+    'cancelled',
+    'delivered',
+    'returned',
+    'shipped',
+  ] as const)(
+    'fails a line closed when a %s status entry has a malformed quantity',
+    async (statusName) => {
+      const order = listOrder(1);
+      const result = await fetchOnlineOrderPurchases(
+        tokens,
+        startDate,
+        endDate,
+        {
+          fetchFn: successfulFetch(
+            [order],
+            [
+              detailOrder(order.orderNumber, [
+                line({
+                  itemNumber: '100010',
+                  itemStatus: itemStatus({
+                    [statusName]: [1, 'not-a-quantity'],
+                  }),
+                  lineItemId: 'malformed-status',
+                }),
+                line({
+                  itemNumber: '100011',
+                  lineItemId: 'valid-status',
+                }),
+              ]),
+            ],
+          ),
+        },
+      );
+
+      expect(result.purchases.map(({ itemNumber }) => itemNumber)).toEqual([
+        '100011',
+      ]);
+    },
+  );
+
   it('requires exact affirmative fulfillment or a real pickup-completion date', async () => {
     const order = listOrder(1);
-    const noFulfillment = itemStatus({ delivered: 0 });
+    const noFulfillment = itemStatus({ delivered: [] });
     const result = await fetchOnlineOrderPurchases(tokens, startDate, endDate, {
       fetchFn: successfulFetch(
         [order],
@@ -374,65 +480,63 @@ describe('fetchOnlineOrderPurchases', () => {
               itemStatus: noFulfillment,
               lineItemId: 'not-shipped',
               orderStatus: 'Not shipped',
-              shipment: { pickUpCompletedDate: null },
+              shipment: [{ pickUpCompletedDate: null }],
             }),
             line({
               itemNumber: '100102',
               itemStatus: noFulfillment,
               lineItemId: 'not-picked-up',
               orderStatus: 'Not picked up',
-              shipment: { pickUpCompletedDate: null },
+              shipment: [{ pickUpCompletedDate: null }],
             }),
             line({
               itemNumber: '100103',
               itemStatus: noFulfillment,
               lineItemId: 'invalid-pickup-text',
               orderStatus: 'Processing',
-              shipment: { pickUpCompletedDate: 'pending' },
+              shipment: [{ pickUpCompletedDate: 'pending' }],
             }),
             line({
               itemNumber: '100104',
               itemStatus: noFulfillment,
               lineItemId: 'invalid-pickup-date',
               orderStatus: 'Processing',
-              shipment: { pickUpCompletedDate: '2026-99-99' },
+              shipment: [{ pickUpCompletedDate: '2026-99-99' }],
             }),
             line({
               itemNumber: '100105',
               itemStatus: noFulfillment,
               lineItemId: 'exact-shipped',
               orderStatus: '  SHIPPED  ',
-              shipment: { pickUpCompletedDate: null },
+              shipment: [{ pickUpCompletedDate: null }],
             }),
             line({
               itemNumber: '100106',
               itemStatus: noFulfillment,
               lineItemId: 'exact-delivered',
               orderStatus: 'Delivered',
-              shipment: { pickUpCompletedDate: null },
+              shipment: [{ pickUpCompletedDate: null }],
             }),
             line({
               itemNumber: '100107',
               itemStatus: noFulfillment,
               lineItemId: 'exact-pickup-completed',
               orderStatus: 'Pickup completed',
-              shipment: { pickUpCompletedDate: null },
+              shipment: [{ pickUpCompletedDate: null }],
             }),
             line({
               itemNumber: '100108',
               itemStatus: noFulfillment,
               lineItemId: 'valid-pickup-date',
               orderStatus: 'Processing',
-              shipment: { pickUpCompletedDate: '2026-08-02' },
+              shipment: [{ pickUpCompletedDate: '2026-08-02' }],
             }),
             line({
               itemNumber: '100109',
               itemStatus: noFulfillment,
               lineItemId: 'valid-pickup-timestamp',
               orderStatus: 'Processing',
-              shipment: {
-                pickUpCompletedDate: '2026-08-02T10:00:00.000Z',
-              },
+              shipment: [{ pickUpCompletedDate: '2026-08-02T10:00:00.000Z' }],
             }),
           ]),
         ],
@@ -454,12 +558,12 @@ describe('fetchOnlineOrderPurchases', () => {
       line({ isFeeItem: true, itemNumber: '100010', lineItemId: 'fee' }),
       line({
         itemNumber: '100011',
-        itemStatus: itemStatus({ cancelled: 2, delivered: 0 }),
+        itemStatus: itemStatus({ cancelled: [2], delivered: [] }),
         lineItemId: 'cancelled',
       }),
       line({
         itemNumber: '100012',
-        itemStatus: itemStatus({ cancelled: 1 }),
+        itemStatus: itemStatus({ cancelled: [1] }),
         lineItemId: 'partial-cancel',
         orderStatus: 'Partially cancelled',
         quantity: 3,
@@ -471,7 +575,7 @@ describe('fetchOnlineOrderPurchases', () => {
       }),
       line({
         itemNumber: '100014',
-        itemStatus: itemStatus({ delivered: 3, returned: 1 }),
+        itemStatus: itemStatus({ delivered: [3], returned: [1] }),
         lineItemId: 'partial-return',
         orderStatus: 'Partially returned',
         quantity: 3,
@@ -506,21 +610,21 @@ describe('fetchOnlineOrderPurchases', () => {
           detailOrder(order.orderNumber, [
             line({
               itemNumber: '100020',
-              itemStatus: itemStatus({ delivered: 5, returned: 1 }),
+              itemStatus: itemStatus({ delivered: [5], returned: [1] }),
               lineItemId: 'greater-total',
               quantity: 5,
               totalReturnedQuantity: 3,
             }),
             line({
               itemNumber: '100021',
-              itemStatus: itemStatus({ delivered: 5, returned: 4 }),
+              itemStatus: itemStatus({ delivered: [5], returned: [4] }),
               lineItemId: 'greater-status',
               quantity: 5,
               totalReturnedQuantity: 2,
             }),
             line({
               itemNumber: '100022',
-              itemStatus: itemStatus({ cancelled: 2, returned: 4 }),
+              itemStatus: itemStatus({ cancelled: [2], returned: [4] }),
               lineItemId: 'below-zero',
               quantity: 2,
               totalReturnedQuantity: 3,
@@ -557,10 +661,10 @@ describe('fetchOnlineOrderPurchases', () => {
             }),
             line({
               itemNumber: '100033',
-              itemStatus: itemStatus({ delivered: 0 }),
+              itemStatus: itemStatus({ delivered: [] }),
               lineItemId: 'unfulfilled',
               orderStatus: 'Processing',
-              shipment: { pickUpCompletedDate: null },
+              shipment: [{ pickUpCompletedDate: null }],
             }),
           ]),
         ],

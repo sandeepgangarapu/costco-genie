@@ -114,14 +114,14 @@ const itemStatusQuantitySchema = z
   .strict();
 const itemStatusSchema = z
   .object({
-    cancellationRequested: itemStatusQuantitySchema,
-    cancelled: itemStatusQuantitySchema,
-    delivered: itemStatusQuantitySchema,
-    returned: itemStatusQuantitySchema,
-    shipped: itemStatusQuantitySchema,
+    cancellationRequested: z.array(itemStatusQuantitySchema),
+    cancelled: z.array(itemStatusQuantitySchema),
+    delivered: z.array(itemStatusQuantitySchema),
+    returned: z.array(itemStatusQuantitySchema),
+    shipped: z.array(itemStatusQuantitySchema),
   })
   .strict();
-const shipmentSchema = z
+const shipmentEntrySchema = z
   .object({
     pickUpCompletedDate: z.string().trim().min(1).nullable(),
   })
@@ -139,7 +139,7 @@ const orderLineSchema = z
     quantity: wireScalarSchema,
     returnStatus: z.string().nullish(),
     returnableQuantity: wireScalarSchema,
-    shipment: shipmentSchema.nullish(),
+    shipment: z.array(shipmentEntrySchema),
     totalReturnedQuantity: wireScalarSchema,
   })
   .strict();
@@ -409,26 +409,30 @@ function normalizeOrder(order: z.infer<typeof detailOrderSchema>): Purchase[] {
       const lineId = stableIdentifier(orderLine.lineItemId);
       const paidUnitCents = positiveMoneyCents(orderLine.price);
       const orderedQuantity = positiveInteger(orderLine.quantity);
-      const cancelledQuantity = nonnegativeInteger(
-        orderLine.itemStatus.cancelled.quantity,
+      const cancellationRequestedQuantity = summedStatusQuantity(
+        orderLine.itemStatus.cancellationRequested,
       );
-      const returnedStatusQuantity = nonnegativeInteger(
-        orderLine.itemStatus.returned.quantity,
+      const cancelledQuantity = summedStatusQuantity(
+        orderLine.itemStatus.cancelled,
+      );
+      const returnedStatusQuantity = summedStatusQuantity(
+        orderLine.itemStatus.returned,
       );
       const totalReturnedQuantity = nonnegativeInteger(
         orderLine.totalReturnedQuantity,
       );
-      const shippedQuantity = nonnegativeInteger(
-        orderLine.itemStatus.shipped.quantity,
+      const shippedQuantity = summedStatusQuantity(
+        orderLine.itemStatus.shipped,
       );
-      const deliveredQuantity = nonnegativeInteger(
-        orderLine.itemStatus.delivered.quantity,
+      const deliveredQuantity = summedStatusQuantity(
+        orderLine.itemStatus.delivered,
       );
       if (
         itemNumber === null ||
         lineId === null ||
         paidUnitCents === null ||
         orderedQuantity === null ||
+        cancellationRequestedQuantity === null ||
         cancelledQuantity === null ||
         returnedStatusQuantity === null ||
         totalReturnedQuantity === null ||
@@ -441,7 +445,9 @@ function normalizeOrder(order: z.infer<typeof detailOrderSchema>): Purchase[] {
       const fulfilled =
         shippedQuantity > 0 ||
         deliveredQuantity > 0 ||
-        hasPickupCompletion(orderLine.shipment?.pickUpCompletedDate) ||
+        orderLine.shipment.some(({ pickUpCompletedDate }) =>
+          hasPickupCompletion(pickUpCompletedDate),
+        ) ||
         isFulfilledStatus(orderLine.orderStatus);
       if (!fulfilled) return [];
 
@@ -493,6 +499,18 @@ function positiveInteger(value: string | number): number | null {
 function nonnegativeInteger(value: string | number): number | null {
   const parsed = integer(value);
   return parsed !== null && parsed >= 0 ? parsed : null;
+}
+
+function summedStatusQuantity(
+  entries: readonly { readonly quantity: string | number }[],
+): number | null {
+  let total = 0;
+  for (const { quantity } of entries) {
+    const parsed = nonnegativeInteger(quantity);
+    if (parsed === null || !Number.isSafeInteger(total + parsed)) return null;
+    total += parsed;
+  }
+  return total;
 }
 
 function integer(value: string | number): number | null {
