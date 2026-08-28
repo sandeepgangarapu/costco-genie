@@ -529,18 +529,28 @@ async function fetchOnlinePrices(
   const timeoutMilliseconds =
     options.timeoutMilliseconds ?? EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS;
   const groups = new Map<string, PriceRequest[]>();
+  const items: Array<ReportPriceObservation & PriceRequest> = [];
+  let executableRequests = 0;
   for (const request of requests) {
-    if (
-      !DIGITS.test(request.itemNumber) ||
-      !DIGITS.test(request.warehouseNumber)
-    ) {
+    if (!DIGITS.test(request.itemNumber)) {
+      items.push({
+        ...request,
+        ...unavailable('costco_com', 'invalid_item_number'),
+      });
       continue;
     }
+    if (!DIGITS.test(request.warehouseNumber)) {
+      items.push({
+        ...request,
+        ...unavailable('costco_com', 'invalid_scope'),
+      });
+      continue;
+    }
+    executableRequests += 1;
     const values = groups.get(request.warehouseNumber) ?? [];
     values.push(request);
     groups.set(request.warehouseNumber, values);
   }
-  const items: Array<ReportPriceObservation & PriceRequest> = [];
   let failedBatches = 0;
   for (const [warehouseNumber, group] of groups) {
     for (let offset = 0; offset < group.length; offset += batchSize) {
@@ -614,7 +624,7 @@ async function fetchOnlinePrices(
     diagnostic: diagnostic(
       'costco_com',
       CATALOG_SOURCE,
-      requests.length === 0
+      executableRequests === 0
         ? 'unavailable'
         : failedBatches > 0
           ? 'error'
@@ -622,9 +632,11 @@ async function fetchOnlinePrices(
       observedAt,
       requests.length === 0
         ? 'Costco.com product lookup is not applicable.'
-        : failedBatches > 0
-          ? 'Costco.com lookup completed, but one or more batches failed.'
-          : 'Costco.com product lookup completed.',
+        : executableRequests === 0
+          ? 'Costco.com product lookup was not run because no request had both a valid item number and price scope.'
+          : failedBatches > 0
+            ? 'Costco.com lookup completed, but one or more batches failed.'
+            : 'Costco.com product lookup completed.',
     ),
   };
 }

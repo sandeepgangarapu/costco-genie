@@ -145,8 +145,26 @@ function formatRunSummary(summary: RunSummary): string {
   return [
     `Outcome: ${summary.outcome}`,
     `Purchases: ${String(summary.purchasesProcessed)}`,
+    ...(summary.warehousePurchasesProcessed === undefined
+      ? []
+      : [
+          `Warehouse purchases: ${String(summary.warehousePurchasesProcessed)}`,
+        ]),
+    ...(summary.onlinePurchasesProcessed === undefined
+      ? []
+      : [`Costco.com purchases: ${String(summary.onlinePurchasesProcessed)}`]),
     `Observations: ${String(summary.observationsRecorded)}`,
     `Unresolved: ${String(summary.unresolvedPrices)}`,
+    ...(summary.warehouseUnresolvedPrices === undefined
+      ? []
+      : [
+          `Warehouse unresolved prices: ${String(summary.warehouseUnresolvedPrices)}`,
+        ]),
+    ...(summary.onlineUnresolvedPrices === undefined
+      ? []
+      : [
+          `Costco.com unresolved prices: ${String(summary.onlineUnresolvedPrices)}`,
+        ]),
     `Potential adjustments: ${String(summary.candidatesFound)}`,
     `Estimated opportunities: ${String(summary.estimatedOpportunitiesFound ?? 0)}`,
     `Alerts delivered: ${String(summary.alertsSent)}`,

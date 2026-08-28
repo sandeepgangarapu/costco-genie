@@ -170,6 +170,48 @@ describe('runCli', () => {
     );
   });
 
+  it('prints channel-specific purchase and unresolved counts for a mixed run', async () => {
+    const harness = cliHarness({
+      run: async () => ({
+        ...summary('partial_failure'),
+        onlinePurchasesProcessed: 2,
+        onlineUnresolvedPrices: 1,
+        purchasesProcessed: 5,
+        unresolvedPrices: 2,
+        warehousePurchasesProcessed: 3,
+        warehouseUnresolvedPrices: 1,
+      }),
+    });
+
+    await runCli(['run'], harness.actions, harness.io);
+
+    expect(harness.output.join('\n')).toContain('Warehouse purchases: 3');
+    expect(harness.output.join('\n')).toContain('Costco.com purchases: 2');
+    expect(harness.output.join('\n')).toContain(
+      'Warehouse unresolved prices: 1',
+    );
+    expect(harness.output.join('\n')).toContain(
+      'Costco.com unresolved prices: 1',
+    );
+  });
+
+  it('keeps older run summaries readable when channel-specific counts are absent', async () => {
+    const harness = cliHarness({ run: async () => summary('success') });
+
+    await runCli(['run'], harness.actions, harness.io);
+
+    expect(harness.output.join('\n')).toContain('Purchases: 0');
+    expect(harness.output.join('\n')).toContain('Unresolved: 0');
+    expect(harness.output.join('\n')).not.toContain('Warehouse purchases:');
+    expect(harness.output.join('\n')).not.toContain('Costco.com purchases:');
+    expect(harness.output.join('\n')).not.toContain(
+      'Warehouse unresolved prices:',
+    );
+    expect(harness.output.join('\n')).not.toContain(
+      'Costco.com unresolved prices:',
+    );
+  });
+
   it.each([
     ['success', 0],
     ['skipped', 0],

@@ -240,7 +240,14 @@ describe('createDefaultCliActions composition', () => {
 
     const summary = await actions.run({ scheduled: false });
 
-    expect(summary).toMatchObject({ candidatesFound: 1, outcome: 'success' });
+    expect(summary).toMatchObject({
+      candidatesFound: 1,
+      onlinePurchasesProcessed: 0,
+      onlineUnresolvedPrices: 0,
+      outcome: 'success',
+      warehousePurchasesProcessed: 1,
+      warehouseUnresolvedPrices: 0,
+    });
     expect(requestedDates).toEqual({
       endDate: '2030-08-18',
       startDate: '2030-07-14',

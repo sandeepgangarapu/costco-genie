@@ -11,7 +11,7 @@ Costco Price Matcher is a free, personal tool that does that noticing for you. I
 3. When a supported comparison is lower, it sends you a macOS notification and a plain-text email listing the potential savings.
 4. You review the evidence and contact the appropriate Costco channel if you decide to request an adjustment.
 
-It repeats this automatically every morning (or on any interval you choose), and it never alerts twice about the same purchase and price.
+It repeats this automatically every morning (or on any interval you choose). Identical price-and-urgency alerts are suppressed, while a same-price reminder may recur when the days remaining enter a more urgent bucket.
 
 **Important:** this project is unofficial and is not affiliated with, endorsed by, or supported by Costco. It uses undocumented Costco APIs that can change or stop working without notice. Automated access may be restricted by Costco's terms or account policies; review the applicable terms and use the tool conservatively at your own risk. The tool reports potential savings only: it does not submit a price-adjustment request or guarantee Costco eligibility. Always verify the item, current price, purchase date, active quantity, and applicable policy before acting.
 
@@ -63,7 +63,7 @@ These are the **one-time** things you have to do yourself. After this, everythin
 > - Every day at 09:00 (your Mac's local time), the tool checks recent warehouse receipts and Costco.com orders against channel-correct current prices by itself.
 > - It also runs whenever you log in to or wake your Mac—but only if the last successful check was more than 20 hours ago, so unlocking your Mac does not cause duplicate checks.
 > - When it finds something you bought that is now cheaper, you get a **macOS notification** and a **plain-text email** with the item, prices, and potential savings.
-> - The same purchase is never alerted twice for the same price.
+> - Identical price-and-urgency alerts are suppressed; a same-price reminder may recur when the days remaining enter a more urgent bucket.
 > - If your Costco sign-in ever expires, you get one notification telling you to run `./costco login` again. That is the only maintenance you may ever need to redo.
 > - Nothing else touches Costco: `./costco status` and `./costco doctor` are offline, and all your data stays in `~/.costco-price-matcher/`.
 

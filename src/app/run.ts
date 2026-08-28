@@ -329,12 +329,17 @@ async function executeBegunRun(
 
     if (successfulPurchaseChannels.size < 2) purchaseSourceFailure = true;
     dependencies.database.upsertPurchases(importedPurchases);
+    const currentPurchaseIds = new Set(
+      importedPurchases.map((purchase) => purchase.id),
+    );
     const recentPurchases = dependencies.database
       .recentPurchases(
         `${dateDaysBefore(started, dependencies.config.adjustmentWindowDays)}T00:00:00.000Z`,
       )
-      .filter((purchase) =>
-        successfulPurchaseChannels.has(purchase.purchaseChannel),
+      .filter(
+        (purchase) =>
+          successfulPurchaseChannels.has(purchase.purchaseChannel) &&
+          currentPurchaseIds.has(purchase.id),
       );
     const requests = uniquePriceRequests(recentPurchases);
     const warehousePurchases = recentPurchases.filter(

@@ -613,6 +613,40 @@ describe('fetchReportPriceEvidence', () => {
     expect(calls).toBe(0);
   });
 
+  it('does not run an all-invalid Costco.com lookup and reports sanitized per-item reasons', async () => {
+    let calls = 0;
+    const invalidItem = onlineRequest('not-a-number');
+    const invalidScope = {
+      ...onlineRequest('222222'),
+      warehouseNumber: 'not-a-scope',
+    };
+
+    const result = await fetchReportPriceEvidence([invalidItem, invalidScope], {
+      fetchFn: async () => {
+        calls += 1;
+        return productResponse([]);
+      },
+      now: () => new Date(observedAt),
+    });
+
+    expect(calls).toBe(0);
+    expect(result.items.map(({ prices }) => prices.costcoCom)).toMatchObject([
+      { unitPriceCents: null, unavailableReason: 'invalid_item_number' },
+      { unitPriceCents: null, unavailableReason: 'invalid_scope' },
+    ]);
+    const onlineDiagnostic = result.diagnostics.find(
+      ({ channel }) => channel === 'costco_com',
+    );
+    expect(onlineDiagnostic).toMatchObject({
+      message:
+        'Costco.com product lookup was not run because no request had both a valid item number and price scope.',
+      status: 'unavailable',
+    });
+    expect(JSON.stringify(onlineDiagnostic)).not.toMatch(
+      /not-a-number|not-a-scope/u,
+    );
+  });
+
   it.each([
     ['an item-number mismatch', [product('999999', '10.00', 'ONLINE')]],
     [
