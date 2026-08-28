@@ -41,6 +41,7 @@ const purchase: Purchase = {
   id: 'purchase-123',
   itemNumber: '100001',
   paidUnitCents: 1150,
+  purchaseChannel: 'warehouse',
   purchasedAt: '2026-08-01T16:30:00.000Z',
   quantity: 2,
   receiptId: 'receipt-123',
@@ -128,6 +129,93 @@ describe('Database', () => {
       purchase,
       otherWarehousePurchase,
     ]);
+    database.close();
+  });
+
+  it('round-trips a Costco.com purchase channel through an update', () => {
+    const database = createDatabase();
+    const onlinePurchase: Purchase = {
+      ...purchase,
+      id: 'online-purchase-123',
+      purchaseChannel: 'costco_com',
+      receiptId: 'online-order-123',
+    };
+    const updatedOnlinePurchase: Purchase = {
+      ...onlinePurchase,
+      paidUnitCents: 1100,
+      quantity: 3,
+    };
+
+    database.upsertPurchases([onlinePurchase]);
+    database.upsertPurchases([updatedOnlinePurchase]);
+
+    expect(database.recentPurchases('2026-08-01T00:00:00.000Z')).toEqual([
+      updatedOnlinePurchase,
+    ]);
+    database.close();
+  });
+
+  it('migrates legacy purchase rows to warehouse and reads them from legacy read-only databases', () => {
+    const directory = createTemporaryDirectory();
+    const path = join(directory, 'legacy.sqlite');
+    const legacy = new Sqlite(path);
+    legacy.exec(`
+      CREATE TABLE purchases (
+        id TEXT PRIMARY KEY, description TEXT, receipt_id TEXT NOT NULL,
+        item_number TEXT NOT NULL, warehouse_number TEXT NOT NULL,
+        purchased_at TEXT NOT NULL, gross_unit_cents INTEGER,
+        paid_unit_cents INTEGER NOT NULL, quantity INTEGER NOT NULL,
+        coupon_cents INTEGER NOT NULL
+      );
+      INSERT INTO purchases VALUES
+        ('legacy-one', NULL, 'receipt-one', '100001', '123',
+         '2026-08-02T00:00:00.000Z', 1250, 1150, 1, 0),
+        ('legacy-two', NULL, 'receipt-two', '100002', '456',
+         '2026-08-03T00:00:00.000Z', 1300, 1200, 1, 0);
+    `);
+    legacy.close();
+
+    const readOnly = Database.openReadOnly(path);
+    expect(
+      readOnly
+        .recentPurchases('2026-08-01T00:00:00.000Z')
+        .map((legacyPurchase) => legacyPurchase.purchaseChannel),
+    ).toEqual(['warehouse', 'warehouse']);
+    readOnly.close();
+
+    const database = Database.open(path);
+    expect(
+      database
+        .recentPurchases('2026-08-01T00:00:00.000Z')
+        .map((legacyPurchase) => legacyPurchase.purchaseChannel),
+    ).toEqual(['warehouse', 'warehouse']);
+    database.close();
+  });
+
+  it('fails closed to warehouse for a corrupt persisted purchase channel', () => {
+    const directory = createTemporaryDirectory();
+    const path = join(directory, 'corrupt.sqlite');
+    const corrupt = new Sqlite(path);
+    corrupt.exec(`
+      CREATE TABLE purchases (
+        id TEXT PRIMARY KEY, description TEXT, receipt_id TEXT NOT NULL,
+        item_number TEXT NOT NULL, warehouse_number TEXT NOT NULL,
+        purchased_at TEXT NOT NULL, gross_unit_cents INTEGER,
+        paid_unit_cents INTEGER NOT NULL, quantity INTEGER NOT NULL,
+        coupon_cents INTEGER NOT NULL, purchase_channel TEXT NOT NULL
+      );
+      INSERT INTO purchases VALUES (
+        'corrupt', NULL, 'receipt', '100001', '123',
+        '2026-08-02T00:00:00.000Z', 1250, 1150, 1, 0, 'invalid'
+      );
+    `);
+    corrupt.close();
+
+    const database = Database.openReadOnly(path);
+    expect(
+      database.recentPurchases('2026-08-01T00:00:00.000Z')[0]
+        ?.purchaseChannel,
+    ).toBe('warehouse');
     database.close();
   });
 

@@ -60,6 +60,18 @@ describe('fetchReceipts', () => {
     );
   });
 
+  it('marks every normalized receipt line as a warehouse purchase', () => {
+    const purchases = normalizeReceipts(
+      adaptCostcoReceipts(numericLiveReceiptFixture),
+      new Date('2026-08-18T00:00:00.000Z'),
+    );
+
+    expect(purchases).not.toHaveLength(0);
+    expect(
+      purchases.every((purchase) => purchase.purchaseChannel === 'warehouse'),
+    ).toBe(true);
+  });
+
   it('converts a negative item-array discount with a spaced item reference into a coupon', () => {
     const adapted = adaptCostcoReceipts([
       {
@@ -424,6 +436,7 @@ describe('fetchReceipts', () => {
         id: 'c668212a7867d83dca123a6f1942d802fc87fce6a69c9e60fb4dbe944f0b6b21',
         itemNumber: '100978861',
         paidUnitCents: 899,
+        purchaseChannel: 'warehouse',
         purchasedAt: '2026-08-10T18:30:00.000Z',
         quantity: 2,
         receiptId: '211290123456789',

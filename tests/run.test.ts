@@ -1195,6 +1195,7 @@ describe('runPriceCheck', () => {
         id: 'existing-purchase',
         itemNumber: '333333',
         paidUnitCents: 1000,
+        purchaseChannel: 'warehouse',
         purchasedAt: '2026-08-12T09:00:00.000Z',
         quantity: 1,
         receiptId: 'existing-receipt',

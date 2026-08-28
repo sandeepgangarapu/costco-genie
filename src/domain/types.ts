@@ -1,3 +1,5 @@
+export type PurchaseChannel = 'warehouse' | 'costco_com';
+
 export interface Purchase {
   readonly description?: string;
   readonly id: string;
@@ -7,6 +9,7 @@ export interface Purchase {
   readonly purchasedAt: string;
   readonly grossUnitCents?: number;
   readonly paidUnitCents: number;
+  readonly purchaseChannel: PurchaseChannel;
   readonly quantity: number;
   readonly couponCents: number;
 }

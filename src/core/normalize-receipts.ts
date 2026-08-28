@@ -167,6 +167,7 @@ export function normalizeReceipts(rawReceipts: unknown, now: Date): Purchase[] {
             grossUnitCents: line.unitPriceCents,
             itemNumber: line.itemNumber,
             paidUnitCents: paidLineCents / line.quantity,
+            purchaseChannel: 'warehouse',
             purchasedAt: transaction.purchasedAt,
             quantity: line.quantity,
             receiptId: transaction.receiptId,

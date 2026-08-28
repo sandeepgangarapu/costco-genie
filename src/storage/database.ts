@@ -4,6 +4,7 @@ import type {
   NotificationResults,
   PriceObservation,
   Purchase,
+  PurchaseChannel,
   RunSummary,
 } from '../domain/types.js';
 import {
@@ -27,6 +28,7 @@ interface PurchaseRow {
   id: string;
   item_number: string;
   paid_unit_cents: number;
+  purchase_channel: unknown;
   purchased_at: string;
   quantity: number;
   receipt_id: string;
@@ -64,6 +66,7 @@ interface AlertStateRow {
 }
 
 export class Database {
+  private readonly purchaseChannelSelection: string;
   private readonly runDiagnosticSelection: string;
   private readonly runReportFilesSelection: string;
   private readonly runEstimatedOpportunitiesSelection: string;
@@ -74,6 +77,12 @@ export class Database {
   ) {
     this.sqlite.pragma('foreign_keys = ON');
     if (!initializeSchema) {
+      this.purchaseChannelSelection = this.hasColumn(
+        'purchases',
+        'purchase_channel',
+      )
+        ? 'purchase_channel'
+        : "'warehouse' AS purchase_channel";
       this.runDiagnosticSelection = this.hasColumn('runs', 'diagnostic')
         ? 'diagnostic'
         : 'NULL AS diagnostic';
@@ -95,6 +104,7 @@ export class Database {
         receipt_id TEXT NOT NULL,
         item_number TEXT NOT NULL,
         warehouse_number TEXT NOT NULL,
+        purchase_channel TEXT NOT NULL DEFAULT 'warehouse',
         purchased_at TEXT NOT NULL,
         gross_unit_cents INTEGER,
         paid_unit_cents INTEGER NOT NULL,
@@ -150,6 +160,11 @@ export class Database {
     `);
     this.ensureColumn('purchases', 'description', 'TEXT');
     this.ensureColumn('purchases', 'gross_unit_cents', 'INTEGER');
+    this.ensureColumn(
+      'purchases',
+      'purchase_channel',
+      "TEXT NOT NULL DEFAULT 'warehouse'",
+    );
     this.ensureColumn('runs', 'notification_results', 'TEXT');
     this.ensureColumn('runs', 'report_files', 'TEXT');
     this.ensureColumn('runs', 'diagnostic', 'TEXT');
@@ -161,6 +176,7 @@ export class Database {
     this.runDiagnosticSelection = 'diagnostic';
     this.runReportFilesSelection = 'report_files';
     this.runEstimatedOpportunitiesSelection = 'estimated_opportunities_found';
+    this.purchaseChannelSelection = 'purchase_channel';
     this.sqlite.exec(`
       INSERT OR IGNORE INTO alert_delivery_state (
         channel, purchase_id, last_notified_price_cents, urgency_bucket
@@ -217,10 +233,10 @@ export class Database {
     const statement = this.sqlite.prepare(`
       INSERT INTO purchases (
         id, description, receipt_id, item_number, warehouse_number, purchased_at,
-        gross_unit_cents, paid_unit_cents, quantity, coupon_cents
+        gross_unit_cents, paid_unit_cents, quantity, coupon_cents, purchase_channel
       ) VALUES (
         @id, @description, @receiptId, @itemNumber, @warehouseNumber, @purchasedAt,
-        @grossUnitCents, @paidUnitCents, @quantity, @couponCents
+        @grossUnitCents, @paidUnitCents, @quantity, @couponCents, @purchaseChannel
       ) ON CONFLICT(id) DO UPDATE SET
         description = excluded.description,
         receipt_id = excluded.receipt_id,
@@ -230,7 +246,8 @@ export class Database {
         gross_unit_cents = excluded.gross_unit_cents,
         paid_unit_cents = excluded.paid_unit_cents,
         quantity = excluded.quantity,
-        coupon_cents = excluded.coupon_cents
+        coupon_cents = excluded.coupon_cents,
+        purchase_channel = excluded.purchase_channel
     `);
     const upsert = this.sqlite.transaction((items: readonly Purchase[]) => {
       for (const purchase of items) {
@@ -271,7 +288,8 @@ export class Database {
       .prepare<[string], PurchaseRow>(
         `
         SELECT id, description, receipt_id, item_number, warehouse_number, purchased_at,
-               gross_unit_cents, paid_unit_cents, quantity, coupon_cents
+               gross_unit_cents, paid_unit_cents, quantity, coupon_cents,
+               ${this.purchaseChannelSelection}
         FROM purchases
         WHERE purchased_at >= ?
         ORDER BY purchased_at ASC, id ASC
@@ -477,11 +495,16 @@ function toPurchase(row: PurchaseRow): Purchase {
     id: row.id,
     itemNumber: row.item_number,
     paidUnitCents: row.paid_unit_cents,
+    purchaseChannel: parsePurchaseChannel(row.purchase_channel),
     purchasedAt: row.purchased_at,
     quantity: row.quantity,
     receiptId: row.receipt_id,
     warehouseNumber: row.warehouse_number,
   };
+}
+
+function parsePurchaseChannel(value: unknown): PurchaseChannel {
+  return value === 'costco_com' ? 'costco_com' : 'warehouse';
 }
 
 function toPriceObservation(row: ObservationRow): PriceObservation {
