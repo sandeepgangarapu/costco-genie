@@ -638,6 +638,28 @@ describe('fetchReportPriceEvidence', () => {
     });
   });
 
+  it('treats a schema-malformed exact duplicate as an ambiguous Costco.com match', async () => {
+    const fetchFn: typeof fetch = async () =>
+      productResponse([
+        product('222222', '10.00', 'ONLINE'),
+        {
+          itemNumber: '222222',
+          priceData: null,
+          programTypes: 'ONLINE',
+        },
+      ]);
+
+    const result = await fetchReportPriceEvidence([onlineRequest('222222')], {
+      fetchFn,
+      now: () => new Date(observedAt),
+    });
+
+    expect(result.items[0]?.prices.costcoCom).toMatchObject({
+      unitPriceCents: null,
+      unavailableReason: 'ambiguous_price',
+    });
+  });
+
   it('separates online prices and accepts only current exact-item Warehouse Savings final prices', async () => {
     // Sanitized from the live 2026-08-21 page: global validity copy plus the
     // escaped Next.js hydration fields used by a real coupon card.

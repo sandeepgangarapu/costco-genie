@@ -43,6 +43,8 @@ const catalogProductSchema = z.object({
   programTypes: z.union([z.string(), z.array(z.string())]).optional(),
 });
 
+const catalogItemSchema = z.object({ itemNumber: z.string() });
+
 export interface WarehousePriceRequest {
   readonly description?: string;
   readonly itemNumber: string;
@@ -568,16 +570,19 @@ async function fetchOnlinePrices(
           throw new Error('Malformed or errored GraphQL response');
         }
         for (const request of batch) {
-          const exactProducts = parsed.data.data.products.catalogData.flatMap(
+          const exactEntries = parsed.data.data.products.catalogData.filter(
             (value) => {
-              const product = catalogProductSchema.safeParse(value);
-              return product.success &&
-                product.data.itemNumber === request.itemNumber
-                ? [product.data]
-                : [];
+              const item = catalogItemSchema.safeParse(value);
+              return (
+                item.success && item.data.itemNumber === request.itemNumber
+              );
             },
           );
-          const product = exactProducts.length === 1 ? exactProducts[0] : null;
+          const parsedProduct =
+            exactEntries.length === 1
+              ? catalogProductSchema.safeParse(exactEntries[0])
+              : null;
+          const product = parsedProduct?.success ? parsedProduct.data : null;
           const cents = parseWirePriceToCents(product?.priceData?.price);
           items.push({
             ...request,
@@ -585,9 +590,9 @@ async function fetchOnlinePrices(
               ? available('costco_com', cents, CATALOG_SOURCE, observedAt)
               : unavailable(
                   'costco_com',
-                  exactProducts.length === 0
+                  exactEntries.length === 0
                     ? 'product_not_found'
-                    : exactProducts.length > 1
+                    : exactEntries.length > 1
                       ? 'ambiguous_price'
                       : 'invalid_price',
                 )),
