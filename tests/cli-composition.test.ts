@@ -124,6 +124,8 @@ describe('createDefaultCliActions composition', () => {
       },
     ];
     let requestedDates: { endDate: string; startDate: string } | undefined;
+    let onlineRequestedDates:
+      { endDate: string; startDate: string } | undefined;
     let priceRequests: unknown;
     let lockPath: string | undefined;
     let databaseCloses = 0;
@@ -151,6 +153,20 @@ describe('createDefaultCliActions composition', () => {
         fetchReceipts: async (_tokens, startDate, endDate) => {
           requestedDates = { endDate, startDate };
           return [receipt];
+        },
+        fetchOnlineOrderPurchases: async (_tokens, startDate, endDate) => {
+          onlineRequestedDates = { endDate, startDate };
+          return {
+            diagnostic: {
+              channel: null,
+              message: 'Costco.com order import completed with 0 purchases.',
+              observedAt: now.toISOString(),
+              source: 'costco_online_orders',
+              status: 'ok',
+            },
+            failedDetailBatches: 0,
+            purchases: [],
+          };
         },
         fetchWarehousePrices: async (requests) => {
           priceRequests = requests;
@@ -229,6 +245,7 @@ describe('createDefaultCliActions composition', () => {
       endDate: '2030-08-18',
       startDate: '2030-07-14',
     });
+    expect(onlineRequestedDates).toEqual(requestedDates);
     expect(priceRequests).toEqual([
       {
         description: 'Composed item',
@@ -299,6 +316,9 @@ describe('createDefaultCliActions composition', () => {
           },
         }),
         fetchReceipts: async () => {
+          throw new AuthRequiredError();
+        },
+        fetchOnlineOrderPurchases: async () => {
           throw new AuthRequiredError();
         },
         readCostcoTokens: async () => ({

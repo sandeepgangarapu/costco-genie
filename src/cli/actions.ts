@@ -25,6 +25,7 @@ import {
   fetchReportPriceEvidence,
   fetchWarehousePrices,
 } from '../costco/price-client.js';
+import { fetchOnlineOrderPurchases } from '../costco/online-order-client.js';
 import { fetchReceipts } from '../costco/receipt-client.js';
 import type { RunSummary } from '../domain/types.js';
 import {
@@ -70,6 +71,7 @@ export interface DefaultCliDependencies {
   readonly createLock: (path: string) => RunLock;
   readonly createMailNotifier: () => MailNotifier;
   readonly fetchReceipts: RunDependencies['fetchReceipts'];
+  readonly fetchOnlineOrderPurchases: RunDependencies['fetchOnlineOrderPurchases'];
   readonly fetchWarehousePrices: RunDependencies['fetchWarehousePrices'];
   readonly fetchReportPriceEvidence: NonNullable<
     RunDependencies['fetchReportPriceEvidence']
@@ -142,6 +144,7 @@ export function createDefaultCliActions(
             {
               config,
               database,
+              fetchOnlineOrderPurchases: dependencies.fetchOnlineOrderPurchases,
               fetchReceipts: dependencies.fetchReceipts,
               fetchWarehousePrices: dependencies.fetchWarehousePrices,
               fetchReportPriceEvidence: dependencies.fetchReportPriceEvidence,
@@ -310,6 +313,7 @@ function defaultCliDependencies(): DefaultCliDependencies {
     createLocalNotifier: () => new MacOsNotifier(),
     createLock: (path) => new FileRunLock(path),
     createMailNotifier: () => new AppleMailNotifier(),
+    fetchOnlineOrderPurchases,
     fetchReceipts: (tokens, startDate, endDate, signal) =>
       fetchReceipts(tokens, startDate, endDate, fetch, signal),
     fetchWarehousePrices,

@@ -8,6 +8,7 @@ import {
 } from '../src/notifications/report.js';
 
 const candidate: AdjustmentCandidate = {
+  comparisonChannel: 'warehouse',
   currentUnitCents: 1199,
   daysRemaining: 3,
   observation: {
@@ -24,6 +25,7 @@ const candidate: AdjustmentCandidate = {
     id: 'purchase-1',
     itemNumber: '100001<script>',
     paidUnitCents: 1500,
+    purchaseChannel: 'warehouse',
     purchasedAt: '2026-08-15T09:00:00.000Z',
     quantity: 2,
     receiptId: 'receipt-1',
@@ -32,7 +34,52 @@ const candidate: AdjustmentCandidate = {
   savingsCents: 602,
 };
 
+const onlineCandidate: AdjustmentCandidate = {
+  ...candidate,
+  comparisonChannel: 'costco_com',
+  observation: {
+    ...candidate.observation,
+    source: 'costco_product_api',
+    warehouseNumber: '847',
+  },
+  purchase: {
+    ...candidate.purchase,
+    description: 'Kirkland Coffee',
+    id: 'online-purchase-1',
+    itemNumber: '200001',
+    purchaseChannel: 'costco_com',
+    receiptId: 'costco.com:ORDER-1',
+    warehouseNumber: '847',
+  },
+};
+
 describe('report rendering', () => {
+  it('does not add Costco.com guidance to an empty HTML report', () => {
+    const report = renderHtmlReport({ candidates: [] });
+
+    expect(report).toContain('No potential price adjustments found.');
+    expect(report).not.toContain('current Costco.com price');
+  });
+
+  it.each([
+    ['compact', renderCompactReport],
+    ['text', renderTextReport],
+    ['HTML', renderHtmlReport],
+  ])(
+    'renders a verified Costco.com candidate correctly in the %s report',
+    (_name, render) => {
+      const report = render({ candidates: [onlineCandidate] });
+
+      expect(report).toContain('Costco.com order');
+      expect(report).toContain('Current Costco.com price: $11.99');
+      expect(report).toContain('Potential savings: $6.02');
+      expect(report).not.toMatch(/WH\s*847/i);
+      expect(report).not.toMatch(/original warehouse/i);
+      expect(report).not.toMatch(/eligib(?:le|ility)/i);
+      expect(report).not.toMatch(/adjustment/i);
+    },
+  );
+
   it('renders a compact potential-adjustment text report with original warehouse, prices, savings, and days remaining', () => {
     const report = renderTextReport({ candidates: [candidate] });
 

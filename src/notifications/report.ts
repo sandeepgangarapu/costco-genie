@@ -25,20 +25,42 @@ export function renderCompactReport(summary: AdjustmentReportSummary): string {
   );
   const count = summary.candidates.length;
   const hidden = Math.max(0, count - COMPACT_ITEM_LIMIT);
-  const hasEstimates = summary.candidates.some(
-    (candidate) => candidate.estimated === true,
+  const hasEstimates = summary.candidates.some((candidate) =>
+    isSameDayCandidate(candidate),
   );
-  const footer = hasEstimates
-    ? 'Estimated from Same-Day pricing. Verify at the original warehouse.'
-    : 'Verify at the original warehouse.';
+  const hasOnline = summary.candidates.some((candidate) =>
+    isOnlineCandidate(candidate),
+  );
+  const hasWarehouse = summary.candidates.some(
+    (candidate) => !isOnlineCandidate(candidate),
+  );
+  const footer = [
+    ...(hasWarehouse
+      ? [
+          hasEstimates
+            ? 'Estimated from Same-Day pricing. Verify at the original warehouse.'
+            : 'Verify at the original warehouse.',
+        ]
+      : []),
+    ...(hasOnline
+      ? [
+          'Costco.com prices can change; review the order before contacting Costco.',
+        ]
+      : []),
+  ].join(' ');
   const lines = [
-    `${String(count)} potential ${count === 1 ? 'adjustment' : 'adjustments'} • ${formatCents(totalSavings)} total potential savings`,
+    hasOnline && !hasWarehouse
+      ? `${String(count)} Costco.com price ${count === 1 ? 'drop' : 'drops'} • ${formatCents(totalSavings)} total potential savings`
+      : `${String(count)} potential ${count === 1 ? 'adjustment' : 'adjustments'} • ${formatCents(totalSavings)} total potential savings`,
     ...ordered.slice(0, COMPACT_ITEM_LIMIT).map((candidate) => {
       const description = truncateText(
         escapeText(candidateDescription(candidate)),
         COMPACT_DESCRIPTION_LENGTH,
       );
-      const label = candidate.estimated === true ? 'Estimated: ' : '';
+      if (isOnlineCandidate(candidate)) {
+        return `• Costco.com order: ${description} (item ${escapeText(candidate.purchase.itemNumber)}): Current Costco.com price: ${formatCents(candidate.currentUnitCents)} • Potential savings: ${formatCents(candidate.savingsCents)} • ${String(candidate.daysRemaining)}d left`;
+      }
+      const label = isSameDayCandidate(candidate) ? 'Estimated: ' : '';
       return `• ${label}${description} (item ${escapeText(candidate.purchase.itemNumber)}, WH ${escapeText(candidate.purchase.warehouseNumber)}): ${formatCents(candidate.savingsCents)} • ${String(candidate.daysRemaining)}d left`;
     }),
     ...(hidden === 0 ? [] : [`+${String(hidden)} more`]),
@@ -62,25 +84,45 @@ export function renderTextReport(summary: AdjustmentReportSummary): string {
     ].join('\n');
   }
 
+  const hasOnline = summary.candidates.some((candidate) =>
+    isOnlineCandidate(candidate),
+  );
+  const hasWarehouse = summary.candidates.some(
+    (candidate) => !isOnlineCandidate(candidate),
+  );
+
   return [
-    'Potential Costco price adjustments',
+    hasOnline && !hasWarehouse
+      ? 'Potential Costco.com savings'
+      : 'Potential Costco price adjustments',
     ...summary.candidates.map((candidate) => candidateSummaryLine(candidate)),
-    'Verify this potential adjustment at the original warehouse.',
+    notificationGuidance(hasWarehouse, hasOnline),
     '',
-    ...summary.candidates.flatMap((candidate) => [
-      candidateHeading(candidate),
-      `Warehouse: ${escapeText(candidate.purchase.warehouseNumber)}`,
-      `Paid: ${formatCents(candidate.purchase.paidUnitCents)}`,
-      `Current: ${formatCents(candidate.currentUnitCents)}`,
-      ...(candidate.estimated === true
+    ...summary.candidates.flatMap((candidate) =>
+      isOnlineCandidate(candidate)
         ? [
-            'Price basis: Estimated warehouse price from Same-Day; manual verification required',
+            `${candidateHeading(candidate)} — Costco.com order`,
+            `Paid in Costco.com order: ${formatCents(candidate.purchase.paidUnitCents)}`,
+            `Current Costco.com price: ${formatCents(candidate.currentUnitCents)}`,
+            `Potential savings: ${formatCents(candidate.savingsCents)}`,
+            `${candidate.daysRemaining} ${pluralizeDay(candidate.daysRemaining)} remaining`,
+            '',
           ]
-        : []),
-      `Potential savings: ${formatCents(candidate.savingsCents)}`,
-      `${candidate.daysRemaining} ${pluralizeDay(candidate.daysRemaining)} remaining`,
-      '',
-    ]),
+        : [
+            candidateHeading(candidate),
+            `Warehouse: ${escapeText(candidate.purchase.warehouseNumber)}`,
+            `Paid: ${formatCents(candidate.purchase.paidUnitCents)}`,
+            `Current: ${formatCents(candidate.currentUnitCents)}`,
+            ...(isSameDayCandidate(candidate)
+              ? [
+                  'Price basis: Estimated warehouse price from Same-Day; manual verification required',
+                ]
+              : []),
+            `Potential savings: ${formatCents(candidate.savingsCents)}`,
+            `${candidate.daysRemaining} ${pluralizeDay(candidate.daysRemaining)} remaining`,
+            '',
+          ],
+    ),
   ]
     .join('\n')
     .trimEnd();
@@ -88,21 +130,31 @@ export function renderTextReport(summary: AdjustmentReportSummary): string {
 
 export function renderHtmlReport(summary: AdjustmentReportSummary): string {
   const itemSummary = summary.candidates
-    .map(
-      (candidate) =>
-        `<p><strong>Item ${escapeHtml(candidate.purchase.itemNumber)}</strong> | ${escapeHtml(candidateDescription(candidate))} | Purchased ${escapeHtml(purchaseDate(candidate))}</p>`,
-    )
+    .map((candidate) => {
+      const prefix = isOnlineCandidate(candidate) ? 'Costco.com order | ' : '';
+      return `<p><strong>${prefix}Item ${escapeHtml(candidate.purchase.itemNumber)}</strong> | ${escapeHtml(candidateDescription(candidate))} | Purchased ${escapeHtml(purchaseDate(candidate))}</p>`;
+    })
     .join('\n    ');
   const items = summary.candidates
-    .map(
-      (candidate) => `
+    .map((candidate) =>
+      isOnlineCandidate(candidate)
+        ? `
+        <li>
+          <p><strong>${escapeHtml(candidateDescription(candidate))} — Costco.com order</strong></p>
+          <p>Item: ${escapeHtml(candidate.purchase.itemNumber)}<br>
+          Paid in Costco.com order: ${formatCents(candidate.purchase.paidUnitCents)}<br>
+          Current Costco.com price: ${formatCents(candidate.currentUnitCents)}<br>
+          Potential savings: ${formatCents(candidate.savingsCents)}<br>
+          ${candidate.daysRemaining} ${pluralizeDay(candidate.daysRemaining)} remaining</p>
+        </li>`
+        : `
         <li>
           <p><strong>${escapeHtml(candidateDescription(candidate))}</strong></p>
           <p>Item: ${escapeHtml(candidate.purchase.itemNumber)}<br>
           Original warehouse: ${escapeHtml(candidate.purchase.warehouseNumber)}<br>
           Paid: ${formatCents(candidate.purchase.paidUnitCents)}<br>
           Current: ${formatCents(candidate.currentUnitCents)}<br>
-          ${candidate.estimated === true ? 'Price basis: Estimated warehouse price from Same-Day; manual verification required<br>' : ''}
+          ${isSameDayCandidate(candidate) ? 'Price basis: Estimated warehouse price from Same-Day; manual verification required<br>' : ''}
           Potential savings: ${formatCents(candidate.savingsCents)}<br>
           ${candidate.daysRemaining} ${pluralizeDay(candidate.daysRemaining)} remaining</p>
         </li>`,
@@ -113,13 +165,19 @@ export function renderHtmlReport(summary: AdjustmentReportSummary): string {
     summary.candidates.length === 0
       ? '<p>No potential price adjustments found.</p>'
       : `<ul>${items}\n      </ul>`;
+  const hasOnline = summary.candidates.some((candidate) =>
+    isOnlineCandidate(candidate),
+  );
+  const hasWarehouse = summary.candidates.some(
+    (candidate) => !isOnlineCandidate(candidate),
+  );
 
   return `<!doctype html>
 <html lang="en">
   <body>
-    <h1>Potential Costco price adjustments</h1>
+    <h1>${hasOnline && !hasWarehouse ? 'Potential Costco.com savings' : 'Potential Costco price adjustments'}</h1>
     ${itemSummary}
-    <p>These are potential price adjustments. Verify each one at the original warehouse before requesting an adjustment.</p>
+    <p>${escapeHtml(htmlNotificationGuidance(hasWarehouse, hasOnline))}</p>
     ${body}
   </body>
 </html>`;
@@ -130,7 +188,45 @@ function candidateHeading(candidate: AdjustmentCandidate): string {
 }
 
 function candidateSummaryLine(candidate: AdjustmentCandidate): string {
-  return `Item ${escapeText(candidate.purchase.itemNumber)} | ${escapeText(candidateDescription(candidate))} | Purchased ${escapeText(purchaseDate(candidate))}`;
+  const prefix = isOnlineCandidate(candidate) ? 'Costco.com order | ' : '';
+  return `${prefix}Item ${escapeText(candidate.purchase.itemNumber)} | ${escapeText(candidateDescription(candidate))} | Purchased ${escapeText(purchaseDate(candidate))}`;
+}
+
+function isOnlineCandidate(candidate: AdjustmentCandidate): boolean {
+  return candidate.purchase.purchaseChannel === 'costco_com';
+}
+
+function isSameDayCandidate(candidate: AdjustmentCandidate): boolean {
+  return (
+    candidate.purchase.purchaseChannel === 'warehouse' &&
+    (candidate.comparisonChannel === 'same_day' || candidate.estimated === true)
+  );
+}
+
+function notificationGuidance(
+  hasWarehouse: boolean,
+  hasOnline: boolean,
+): string {
+  if (hasWarehouse && !hasOnline) {
+    return 'Verify this potential adjustment at the original warehouse.';
+  }
+  if (!hasWarehouse && hasOnline) {
+    return 'Review the current Costco.com price before contacting Costco; reported savings are potential only.';
+  }
+  return 'Verify warehouse opportunities at the original warehouse. Review the current Costco.com price before contacting Costco; reported savings are potential only.';
+}
+
+function htmlNotificationGuidance(
+  hasWarehouse: boolean,
+  hasOnline: boolean,
+): string {
+  const warehouseGuidance =
+    'These are potential price adjustments. Verify each one at the original warehouse before requesting an adjustment.';
+  const onlineGuidance =
+    'Review the current Costco.com price before contacting Costco; reported savings are potential only.';
+  if (!hasOnline) return warehouseGuidance;
+  if (!hasWarehouse && hasOnline) return onlineGuidance;
+  return `${warehouseGuidance} ${onlineGuidance}`;
 }
 
 function purchaseDate(candidate: AdjustmentCandidate): string {

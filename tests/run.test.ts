@@ -23,6 +23,8 @@ import { AuthRequiredError } from '../src/costco/errors.js';
 import type {
   FullRunReport,
   PriceObservation,
+  Purchase,
+  ReportPriceObservation,
   RunSummary,
 } from '../src/domain/types.js';
 import { runPriceCheck, type RunDependencies } from '../src/app/run.js';
@@ -65,6 +67,20 @@ const LIVE_RECEIPT = {
   transactionNumber: '4567',
   transactionType: 'Purchase',
   warehouseNumber: '129',
+};
+
+const ONLINE_PURCHASE: Purchase = {
+  couponCents: 0,
+  description: 'Costco.com Coffee',
+  grossUnitCents: 2_000,
+  id: 'online-purchase-1',
+  itemNumber: '200001',
+  paidUnitCents: 2_000,
+  purchaseChannel: 'costco_com',
+  purchasedAt: '2026-08-11T18:30:00.000Z',
+  quantity: 1,
+  receiptId: 'costco.com:ORDER-1',
+  warehouseNumber: '847',
 };
 
 class FakeLocalNotifier {
@@ -117,11 +133,41 @@ function resolvedObservation(
   };
 }
 
+function availableReportPrice(
+  channel: ReportPriceObservation['channel'],
+  unitPriceCents: number,
+): ReportPriceObservation {
+  return {
+    channel,
+    observedAt: NOW.toISOString(),
+    promotionText: null,
+    source:
+      channel === 'warehouse' ? 'warehouse-price-api' : 'costco_product_api',
+    unavailableReason: null,
+    unitPriceCents,
+  };
+}
+
+function unavailableReportPrice(
+  channel: ReportPriceObservation['channel'],
+  unavailableReason = 'not_applicable',
+): ReportPriceObservation {
+  return {
+    channel,
+    observedAt: null,
+    promotionText: null,
+    source: null,
+    unavailableReason,
+    unitPriceCents: null,
+  };
+}
+
 function dependencies(
   options: {
     config?: AppConfig;
     database?: Database;
     fetchPrices?: RunDependencies['fetchWarehousePrices'];
+    fetchOnlineOrders?: RunDependencies['fetchOnlineOrderPurchases'];
     fetchReceipts?: RunDependencies['fetchReceipts'];
     local?: FakeLocalNotifier;
     mail?: FakeMailNotifier;
@@ -145,6 +191,19 @@ function dependencies(
       ? {}
       : { createTimeoutSignal: options.createTimeoutSignal }),
     database,
+    fetchOnlineOrderPurchases:
+      options.fetchOnlineOrders ??
+      (async () => ({
+        diagnostic: {
+          channel: null,
+          message: 'Costco.com order import completed with 0 purchases.',
+          observedAt: NOW.toISOString(),
+          source: 'costco_online_orders',
+          status: 'ok',
+        },
+        failedDetailBatches: 0,
+        purchases: [],
+      })),
     fetchReceipts: options.fetchReceipts ?? (async () => [LIVE_RECEIPT]),
     fetchWarehousePrices:
       options.fetchPrices ?? (async () => [resolvedObservation()]),
@@ -530,6 +589,687 @@ describe('FileRunLock', () => {
 });
 
 describe('runPriceCheck', () => {
+  it('starts both purchase imports after one token read with the same configured window', async () => {
+    const tokens = { clientId: 'shared-client', idToken: 'shared-token' };
+    const calls: Array<{
+      endDate: string;
+      source: 'online' | 'receipts';
+      startDate: string;
+      tokens: typeof tokens;
+    }> = [];
+    let onlineStarted = false;
+    let tokenReads = 0;
+    const deps = dependencies({
+      fetchOnlineOrders: async (receivedTokens, startDate, endDate) => {
+        onlineStarted = true;
+        calls.push({
+          endDate,
+          source: 'online',
+          startDate,
+          tokens: receivedTokens,
+        });
+        return {
+          diagnostic: {
+            channel: null,
+            message: 'Costco.com order import completed with 0 purchases.',
+            observedAt: NOW.toISOString(),
+            source: 'costco_online_orders',
+            status: 'ok',
+          },
+          failedDetailBatches: 0,
+          purchases: [],
+        };
+      },
+      fetchPrices: async () => [],
+      fetchReceipts: async (receivedTokens, startDate, endDate) => {
+        calls.push({
+          endDate,
+          source: 'receipts',
+          startDate,
+          tokens: receivedTokens,
+        });
+        await Promise.resolve();
+        expect(onlineStarted).toBe(true);
+        return [];
+      },
+      readTokens: async () => {
+        tokenReads += 1;
+        return tokens;
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(tokenReads).toBe(1);
+    expect(calls).toEqual([
+      {
+        endDate: '2026-08-18',
+        source: 'receipts',
+        startDate: '2026-07-14',
+        tokens,
+      },
+      {
+        endDate: '2026-08-18',
+        source: 'online',
+        startDate: '2026-07-14',
+        tokens,
+      },
+    ]);
+    expect(summary.outcome).toBe('success');
+    deps.database.close();
+  });
+
+  it('imports, persists, prices, and counts warehouse and Costco.com purchases by channel', async () => {
+    const reports: FullRunReport[] = [];
+    let priceRequests: unknown;
+    const deps = dependencies({
+      fetchEvidence: async (requests) => {
+        priceRequests = requests;
+        return {
+          diagnostics: [],
+          items: requests.map((request) => ({
+            ...request,
+            prices:
+              request.purchaseChannel === 'warehouse'
+                ? {
+                    warehouse: availableReportPrice('warehouse', 799),
+                    warehouseSavings: unavailableReportPrice(
+                      'warehouse_savings',
+                      'item_not_advertised',
+                    ),
+                    costcoCom: unavailableReportPrice(
+                      'costco_com',
+                      'product_not_found',
+                    ),
+                    sameDay: unavailableReportPrice(
+                      'same_day',
+                      'source_not_configured',
+                    ),
+                  }
+                : {
+                    warehouse: unavailableReportPrice('warehouse'),
+                    warehouseSavings:
+                      unavailableReportPrice('warehouse_savings'),
+                    costcoCom: availableReportPrice('costco_com', 1_500),
+                    sameDay: unavailableReportPrice('same_day'),
+                  },
+          })),
+        };
+      },
+      fetchOnlineOrders: async () => ({
+        diagnostic: {
+          channel: null,
+          message: 'Costco.com order import completed with 1 purchase.',
+          observedAt: NOW.toISOString(),
+          source: 'costco_online_orders',
+          status: 'ok',
+        },
+        failedDetailBatches: 0,
+        purchases: [ONLINE_PURCHASE],
+      }),
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/mixed.html',
+          csvFile: '/reports/mixed.csv',
+          jsonFile: '/reports/mixed.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(priceRequests).toEqual([
+      {
+        description: 'Kirkland Trail Mix',
+        itemNumber: '100978861',
+        purchaseChannel: 'warehouse',
+        warehouseNumber: '129',
+      },
+      {
+        description: 'Costco.com Coffee',
+        itemNumber: '200001',
+        purchaseChannel: 'costco_com',
+        warehouseNumber: '847',
+      },
+    ]);
+    expect(summary).toMatchObject({
+      alertsSent: 2,
+      candidatesFound: 2,
+      onlinePurchasesProcessed: 1,
+      outcome: 'success',
+      purchasesProcessed: 2,
+      warehousePurchasesProcessed: 1,
+    });
+    expect(summary.notifications).toEqual({
+      email: { attempted: true, delivered: 2, error: null },
+      local: { attempted: true, delivered: 2, error: null },
+    });
+    expect(
+      deps.database
+        .recentPurchases('2026-08-01T00:00:00.000Z')
+        .map(({ purchaseChannel }) => purchaseChannel),
+    ).toEqual(['warehouse', 'costco_com']);
+    expect(reports[0]?.rows).toHaveLength(2);
+    expect(
+      reports[0]?.rows.find(
+        ({ purchase }) => purchase.purchaseChannel === 'costco_com',
+      ),
+    ).toMatchObject({
+      prices: {
+        costcoCom: { unitPriceCents: 1_500 },
+        receiptHistory: {
+          unavailableReason: 'not_applicable',
+          unitPriceCents: null,
+        },
+      },
+      status: 'candidate',
+    });
+    deps.database.close();
+  });
+
+  it('pairs evidence by channel when warehouse and Costco.com share an item and scope', async () => {
+    const reports: FullRunReport[] = [];
+    const warehouseReceipt = {
+      ...LIVE_RECEIPT,
+      couponArray: [],
+      itemArray: [
+        {
+          amount: '30.00',
+          itemDescription01: 'Warehouse Coffee',
+          itemNumber: ONLINE_PURCHASE.itemNumber,
+          unit: '1',
+        },
+      ],
+      warehouseNumber: ONLINE_PURCHASE.warehouseNumber,
+    };
+    const deps = dependencies({
+      fetchEvidence: async (requests) => ({
+        diagnostics: [],
+        items: requests.map((request) => ({
+          ...request,
+          prices:
+            request.purchaseChannel === 'warehouse'
+              ? {
+                  warehouse: availableReportPrice('warehouse', 2_500),
+                  warehouseSavings: unavailableReportPrice('warehouse_savings'),
+                  costcoCom: unavailableReportPrice(
+                    'costco_com',
+                    'product_not_found',
+                  ),
+                  sameDay: unavailableReportPrice('same_day'),
+                }
+              : {
+                  warehouse: unavailableReportPrice('warehouse'),
+                  warehouseSavings: unavailableReportPrice('warehouse_savings'),
+                  costcoCom: availableReportPrice('costco_com', 1_500),
+                  sameDay: unavailableReportPrice('same_day'),
+                },
+        })),
+      }),
+      fetchOnlineOrders: async () => ({
+        diagnostic: {
+          channel: null,
+          message: 'Costco.com order import completed with 1 purchase.',
+          observedAt: NOW.toISOString(),
+          source: 'costco_online_orders',
+          status: 'ok',
+        },
+        failedDetailBatches: 0,
+        purchases: [ONLINE_PURCHASE],
+      }),
+      fetchReceipts: async () => [warehouseReceipt],
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/shared-key.html',
+          csvFile: '/reports/shared-key.csv',
+          jsonFile: '/reports/shared-key.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary.candidatesFound).toBe(2);
+    expect(reports[0]?.rows).toEqual([
+      expect.objectContaining({
+        prices: expect.objectContaining({
+          warehouse: expect.objectContaining({ unitPriceCents: 2_500 }),
+        }),
+        purchase: expect.objectContaining({ purchaseChannel: 'warehouse' }),
+      }),
+      expect.objectContaining({
+        prices: expect.objectContaining({
+          costcoCom: expect.objectContaining({ unitPriceCents: 1_500 }),
+          warehouse: expect.objectContaining({ unitPriceCents: null }),
+        }),
+        purchase: expect.objectContaining({ purchaseChannel: 'costco_com' }),
+      }),
+    ]);
+    deps.database.close();
+  });
+
+  it('delivers an exact lower Costco.com price once per notification channel', async () => {
+    const deps = dependencies({
+      fetchEvidence: async (requests) => ({
+        diagnostics: [],
+        items: requests.map((request) => ({
+          ...request,
+          prices: {
+            warehouse: unavailableReportPrice('warehouse'),
+            warehouseSavings: unavailableReportPrice('warehouse_savings'),
+            costcoCom: availableReportPrice('costco_com', 1_500),
+            sameDay: unavailableReportPrice('same_day'),
+          },
+        })),
+      }),
+      fetchOnlineOrders: async () => ({
+        diagnostic: {
+          channel: null,
+          message: 'Costco.com order import completed with 1 purchase.',
+          observedAt: NOW.toISOString(),
+          source: 'costco_online_orders',
+          status: 'ok',
+        },
+        failedDetailBatches: 0,
+        purchases: [ONLINE_PURCHASE],
+      }),
+      fetchReceipts: async () => [],
+    });
+
+    const first = await runPriceCheck(deps, { now: () => NOW });
+    const repeated = await runPriceCheck(deps, {
+      now: () => new Date('2026-08-18T17:00:00.000Z'),
+    });
+
+    expect(first).toMatchObject({ alertsSent: 1, candidatesFound: 1 });
+    expect(first.notifications).toEqual({
+      email: { attempted: true, delivered: 1, error: null },
+      local: { attempted: true, delivered: 1, error: null },
+    });
+    expect(repeated.alertsSent).toBe(0);
+    expect(deps.localNotifier.messages).toHaveLength(1);
+    expect(deps.mailNotifier.messages).toHaveLength(1);
+    expect(
+      deps.database.getChannelAlertState('local', ONLINE_PURCHASE.id),
+    ).toMatchObject({ lastNotifiedPriceCents: 1_500 });
+    expect(
+      deps.database.getChannelAlertState('email', ONLINE_PURCHASE.id),
+    ).toMatchObject({ lastNotifiedPriceCents: 1_500 });
+    deps.database.close();
+  });
+
+  it('uses only current Costco.com coverage when receipt import fails', async () => {
+    const reports: FullRunReport[] = [];
+    const database = createDatabase();
+    database.upsertPurchases([
+      {
+        couponCents: 0,
+        id: 'stale-warehouse',
+        itemNumber: '333333',
+        paidUnitCents: 1_000,
+        purchaseChannel: 'warehouse',
+        purchasedAt: '2026-08-12T09:00:00.000Z',
+        quantity: 1,
+        receiptId: 'stale-receipt',
+        warehouseNumber: '129',
+      },
+    ]);
+    let priceRequests: unknown;
+    const deps = dependencies({
+      database,
+      fetchEvidence: async (requests) => {
+        priceRequests = requests;
+        return {
+          diagnostics: [],
+          items: requests.map((request) => ({
+            ...request,
+            prices: {
+              warehouse: unavailableReportPrice('warehouse'),
+              warehouseSavings: unavailableReportPrice('warehouse_savings'),
+              costcoCom: availableReportPrice('costco_com', 2_000),
+              sameDay: unavailableReportPrice('same_day'),
+            },
+          })),
+        };
+      },
+      fetchOnlineOrders: async () => ({
+        diagnostic: {
+          channel: null,
+          message: 'Costco.com order import completed with 1 purchase.',
+          observedAt: NOW.toISOString(),
+          source: 'costco_online_orders',
+          status: 'ok',
+        },
+        failedDetailBatches: 0,
+        purchases: [ONLINE_PURCHASE],
+      }),
+      fetchReceipts: async () => {
+        throw new Error('receipt failed token=receipt-secret');
+      },
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/online-only.html',
+          csvFile: '/reports/online-only.csv',
+          jsonFile: '/reports/online-only.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary).toMatchObject({
+      onlinePurchasesProcessed: 1,
+      outcome: 'partial_failure',
+      purchasesProcessed: 1,
+      warehousePurchasesProcessed: 0,
+    });
+    expect(summary.diagnostic).toMatch(/receipt retrieval failed/i);
+    expect(summary.diagnostic).not.toContain('receipt-secret');
+    expect(priceRequests).toEqual([
+      expect.objectContaining({
+        itemNumber: ONLINE_PURCHASE.itemNumber,
+        purchaseChannel: 'costco_com',
+      }),
+    ]);
+    expect(reports[0]?.rows).toEqual([
+      expect.objectContaining({
+        purchase: expect.objectContaining({ purchaseChannel: 'costco_com' }),
+      }),
+    ]);
+    expect(reports[0]?.sourceDiagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.not.stringContaining('receipt-secret'),
+          source: 'costco_receipts',
+          status: 'error',
+        }),
+        expect.objectContaining({
+          source: 'costco_online_orders',
+          status: 'ok',
+        }),
+      ]),
+    );
+    database.close();
+  });
+
+  it('uses only current warehouse coverage when Costco.com import fails', async () => {
+    const reports: FullRunReport[] = [];
+    const database = createDatabase();
+    database.upsertPurchases([ONLINE_PURCHASE]);
+    let priceRequests: unknown;
+    const deps = dependencies({
+      database,
+      fetchEvidence: async (requests) => {
+        priceRequests = requests;
+        return {
+          diagnostics: [],
+          items: requests.map((request) => ({
+            ...request,
+            prices: {
+              warehouse: availableReportPrice('warehouse', 899),
+              warehouseSavings: unavailableReportPrice(
+                'warehouse_savings',
+                'item_not_advertised',
+              ),
+              costcoCom: unavailableReportPrice(
+                'costco_com',
+                'product_not_found',
+              ),
+              sameDay: unavailableReportPrice(
+                'same_day',
+                'source_not_configured',
+              ),
+            },
+          })),
+        };
+      },
+      fetchOnlineOrders: async () => {
+        throw new Error('online failed access_token=online-secret');
+      },
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/warehouse-only.html',
+          csvFile: '/reports/warehouse-only.csv',
+          jsonFile: '/reports/warehouse-only.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary).toMatchObject({
+      onlinePurchasesProcessed: 0,
+      outcome: 'partial_failure',
+      purchasesProcessed: 1,
+      warehousePurchasesProcessed: 1,
+    });
+    expect(summary.diagnostic).toMatch(/Costco\.com order retrieval failed/i);
+    expect(summary.diagnostic).not.toContain('online-secret');
+    expect(priceRequests).toEqual([
+      expect.objectContaining({
+        itemNumber: '100978861',
+        purchaseChannel: 'warehouse',
+      }),
+    ]);
+    expect(reports[0]?.rows).toEqual([
+      expect.objectContaining({
+        purchase: expect.objectContaining({ purchaseChannel: 'warehouse' }),
+      }),
+    ]);
+    expect(reports[0]?.sourceDiagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.not.stringContaining('online-secret'),
+          source: 'costco_online_orders',
+          status: 'error',
+        }),
+      ]),
+    );
+    database.close();
+  });
+
+  it('returns auth-required when both purchase imports fail and authentication is implicated', async () => {
+    let priceCalls = 0;
+    const deps = dependencies({
+      fetchOnlineOrders: async () => {
+        throw new AuthRequiredError();
+      },
+      fetchPrices: async () => {
+        priceCalls += 1;
+        return [];
+      },
+      fetchReceipts: async () => {
+        throw new Error('receipt transport failed');
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary.outcome).toBe('auth_required');
+    expect(priceCalls).toBe(0);
+    expect(deps.localNotifier.messages).toEqual([
+      expect.objectContaining({
+        body: expect.stringContaining('costco login'),
+      }),
+    ]);
+    deps.database.close();
+  });
+
+  it('returns failure when both purchase imports fail without an auth error', async () => {
+    const reports: FullRunReport[] = [];
+    let priceCalls = 0;
+    const deps = dependencies({
+      fetchOnlineOrders: async () => {
+        throw new Error('online unavailable');
+      },
+      fetchPrices: async () => {
+        priceCalls += 1;
+        return [];
+      },
+      fetchReceipts: async () => {
+        throw new Error('receipts unavailable');
+      },
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/import-failure.html',
+          csvFile: '/reports/import-failure.csv',
+          jsonFile: '/reports/import-failure.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary.outcome).toBe('failure');
+    expect(priceCalls).toBe(0);
+    expect(reports[0]?.rows).toEqual([]);
+    expect(reports[0]?.sourceDiagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: 'costco_receipts', status: 'error' }),
+        expect.objectContaining({
+          source: 'costco_online_orders',
+          status: 'error',
+        }),
+      ]),
+    );
+    deps.database.close();
+  });
+
+  it('uses successful Costco.com detail lines and marks failed detail batches partial', async () => {
+    const reports: FullRunReport[] = [];
+    const deps = dependencies({
+      fetchEvidence: async (requests) => ({
+        diagnostics: [],
+        items: requests.map((request) => ({
+          ...request,
+          prices: {
+            warehouse: unavailableReportPrice('warehouse'),
+            warehouseSavings: unavailableReportPrice('warehouse_savings'),
+            costcoCom: availableReportPrice('costco_com', 1_500),
+            sameDay: unavailableReportPrice('same_day'),
+          },
+        })),
+      }),
+      fetchOnlineOrders: async () => ({
+        diagnostic: {
+          channel: null,
+          message:
+            'Costco.com order import completed with 1 purchase and 1 failed detail batch.',
+          observedAt: NOW.toISOString(),
+          source: 'costco_online_orders',
+          status: 'error',
+        },
+        failedDetailBatches: 1,
+        purchases: [ONLINE_PURCHASE],
+      }),
+      fetchReceipts: async () => [],
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/partial-detail.html',
+          csvFile: '/reports/partial-detail.csv',
+          jsonFile: '/reports/partial-detail.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary).toMatchObject({
+      alertsSent: 1,
+      candidatesFound: 1,
+      onlinePurchasesProcessed: 1,
+      outcome: 'partial_failure',
+      purchasesProcessed: 1,
+    });
+    expect(reports[0]?.rows).toHaveLength(1);
+    expect(reports[0]?.sourceDiagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'costco_online_orders',
+          status: 'error',
+        }),
+      ]),
+    );
+    deps.database.close();
+  });
+
+  it('isolates one Costco.com price failure while matching the other online item', async () => {
+    const secondPurchase: Purchase = {
+      ...ONLINE_PURCHASE,
+      description: 'Costco.com Tea',
+      id: 'online-purchase-2',
+      itemNumber: '200002',
+      receiptId: 'costco.com:ORDER-2',
+    };
+    const reports: FullRunReport[] = [];
+    const deps = dependencies({
+      fetchEvidence: async (requests) => ({
+        diagnostics: [
+          {
+            channel: 'costco_com',
+            message: 'One Costco.com price batch failed.',
+            observedAt: NOW.toISOString(),
+            source: 'costco_product_api',
+            status: 'error',
+          },
+        ],
+        items: requests.map((request) => ({
+          ...request,
+          prices: {
+            warehouse: unavailableReportPrice('warehouse'),
+            warehouseSavings: unavailableReportPrice('warehouse_savings'),
+            costcoCom:
+              request.itemNumber === ONLINE_PURCHASE.itemNumber
+                ? unavailableReportPrice('costco_com', 'batch_failed')
+                : availableReportPrice('costco_com', 1_500),
+            sameDay: unavailableReportPrice('same_day'),
+          },
+        })),
+      }),
+      fetchOnlineOrders: async () => ({
+        diagnostic: {
+          channel: null,
+          message: 'Costco.com order import completed with 2 purchases.',
+          observedAt: NOW.toISOString(),
+          source: 'costco_online_orders',
+          status: 'ok',
+        },
+        failedDetailBatches: 0,
+        purchases: [ONLINE_PURCHASE, secondPurchase],
+      }),
+      fetchReceipts: async () => [],
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/partial-price.html',
+          csvFile: '/reports/partial-price.csv',
+          jsonFile: '/reports/partial-price.json',
+        };
+      },
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary).toMatchObject({
+      alertsSent: 1,
+      candidatesFound: 1,
+      onlineUnresolvedPrices: 1,
+      outcome: 'partial_failure',
+      purchasesProcessed: 2,
+      unresolvedPrices: 1,
+    });
+    expect(reports[0]?.rows).toHaveLength(2);
+    expect(deps.localNotifier.messages[0]?.body).toContain('Costco.com Tea');
+    expect(deps.mailNotifier.messages[0]?.text).toContain('Costco.com Tea');
+    deps.database.close();
+  });
+
   it('writes a full all-line report with separated live channels and historical receipt evidence', async () => {
     const reports: FullRunReport[] = [];
     const earlier = {
@@ -563,6 +1303,7 @@ describe('runPriceCheck', () => {
         items: [
           {
             itemNumber: '100978861',
+            purchaseChannel: 'warehouse',
             warehouseNumber: '129',
             prices: {
               warehouse: {
@@ -699,6 +1440,7 @@ describe('runPriceCheck', () => {
           items: [
             {
               itemNumber: '100978861',
+              purchaseChannel: 'warehouse',
               warehouseNumber: '129',
               prices: {
                 warehouse: unavailable('warehouse'),
@@ -819,7 +1561,14 @@ describe('runPriceCheck', () => {
     expect(
       deps.database.getChannelAlertState('email', purchase?.id ?? ''),
     ).toMatchObject({ lastNotifiedPriceCents: 799 });
-    expect(deps.database.getLastSuccessfulRun()).toEqual(summary);
+    expect(deps.database.getLastSuccessfulRun()).toMatchObject({
+      alertsSent: summary.alertsSent,
+      candidatesFound: summary.candidatesFound,
+      observationsRecorded: summary.observationsRecorded,
+      outcome: summary.outcome,
+      purchasesProcessed: summary.purchasesProcessed,
+      unresolvedPrices: summary.unresolvedPrices,
+    });
     deps.database.close();
   });
 
@@ -1067,8 +1816,11 @@ describe('runPriceCheck', () => {
     deps.database.close();
   });
 
-  it('treats an expired receipt session as auth-required and sends local login recovery', async () => {
+  it('treats expired authorization across both purchase sources as auth-required', async () => {
     const deps = dependencies({
+      fetchOnlineOrders: async () => {
+        throw new AuthRequiredError();
+      },
       fetchReceipts: async () => {
         throw new AuthRequiredError();
       },
@@ -1213,7 +1965,7 @@ describe('runPriceCheck', () => {
 
     const summary = await runPriceCheck(deps, { now: () => NOW });
 
-    expect(summary.outcome).toBe('failure');
+    expect(summary.outcome).toBe('partial_failure');
     expect(database.recentPurchases('2026-08-01T00:00:00.000Z')).toEqual([
       expect.objectContaining({ id: 'existing-purchase' }),
     ]);
@@ -1221,7 +1973,7 @@ describe('runPriceCheck', () => {
     database.close();
   });
 
-  it('writes an empty failure report when receipt retrieval fails', async () => {
+  it('writes an empty partial report when receipt retrieval fails but online import succeeds', async () => {
     const reports: FullRunReport[] = [];
     const deps = dependencies({
       fetchReceipts: async () => {
@@ -1242,14 +1994,14 @@ describe('runPriceCheck', () => {
     expect(summary.reportFiles?.jsonFile).toBe('/reports/failure.json');
     expect(reports).toEqual([
       expect.objectContaining({
-        outcome: 'failure',
+        outcome: 'partial_failure',
         rows: [],
-        sourceDiagnostics: [
+        sourceDiagnostics: expect.arrayContaining([
           expect.objectContaining({
             source: 'costco_receipts',
             status: 'error',
           }),
-        ],
+        ]),
       }),
     ]);
     deps.database.close();

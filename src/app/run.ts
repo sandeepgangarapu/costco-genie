@@ -1,6 +1,6 @@
 import type { AppConfig } from '../config/config.js';
 import { selectAlerts, type AlertSelection } from '../core/alert-policy.js';
-import { findAdjustments } from '../core/matcher.js';
+import { findAdjustments, findOnlineAdjustments } from '../core/matcher.js';
 import { normalizeReceipts } from '../core/normalize-receipts.js';
 import { buildReportRows } from '../core/report-rows.js';
 import type { CostcoTokens } from '../costco/browser-session.js';
@@ -13,11 +13,14 @@ import type {
 } from '../costco/price-client.js';
 import { inverseMarkupCents } from '../costco/same-day-client.js';
 import { adaptCostcoReceipts } from '../costco/receipt-client.js';
+import type { OnlineOrderFetchResult } from '../costco/online-order-client.js';
 import type {
   NotificationChannelResult,
   NotificationResults,
   FullRunReport,
   PriceObservation,
+  Purchase,
+  PurchaseChannel,
   ReportPriceChannels,
   ReportPriceObservation,
   ReportSourceDiagnostic,
@@ -71,6 +74,11 @@ export interface RunDependencies {
     endDate: string,
     signal?: AbortSignal,
   ) => Promise<unknown[]>;
+  readonly fetchOnlineOrderPurchases: (
+    tokens: CostcoTokens,
+    startDate: string,
+    endDate: string,
+  ) => Promise<OnlineOrderFetchResult>;
   readonly fetchWarehousePrices: (
     requests: readonly WarehousePriceRequest[],
     options: WarehousePriceOptions,
@@ -207,33 +215,102 @@ async function executeBegunRun(
       );
     }
 
-    let rawReceipts: unknown[];
-    try {
-      rawReceipts = await dependencies.fetchReceipts(
+    const fetchStartDate = dateDaysBefore(
+      started,
+      dependencies.config.daysToFetch,
+    );
+    const fetchEndDate = datePart(started);
+    const receiptImport = (async (): Promise<Purchase[]> => {
+      const rawReceipts = await dependencies.fetchReceipts(
         tokens,
-        dateDaysBefore(started, dependencies.config.daysToFetch),
-        datePart(started),
+        fetchStartDate,
+        fetchEndDate,
         timeoutSignal(dependencies),
       );
-    } catch (error) {
-      if (error instanceof AuthRequiredError) {
-        const summary = await authRequiredSummary(
+      return normalizeReceipts(adaptCostcoReceipts(rawReceipts), started);
+    })();
+    const onlineImport = (async (): Promise<OnlineOrderFetchResult> =>
+      dependencies.fetchOnlineOrderPurchases(
+        tokens,
+        fetchStartDate,
+        fetchEndDate,
+      ))();
+    const [receiptResult, onlineResult] = await Promise.allSettled([
+      receiptImport,
+      onlineImport,
+    ]);
+    const importedPurchases: Purchase[] = [];
+    const successfulPurchaseChannels = new Set<PurchaseChannel>();
+    const purchaseSourceDiagnostics: ReportSourceDiagnostic[] = [];
+    let purchaseSourceFailure = false;
+    let authImplicated = false;
+
+    if (receiptResult.status === 'fulfilled') {
+      successfulPurchaseChannels.add('warehouse');
+      importedPurchases.push(...receiptResult.value);
+    } else {
+      purchaseSourceFailure = true;
+      authImplicated ||= receiptResult.reason instanceof AuthRequiredError;
+      purchaseSourceDiagnostics.push(
+        sourceDiagnostic(
+          null,
+          'costco_receipts',
+          'error',
+          now().toISOString(),
+          receiptResult.reason instanceof AuthRequiredError
+            ? 'Receipt authorization expired.'
+            : failureDiagnostic(
+                'Receipt retrieval failed',
+                receiptResult.reason,
+              ),
+        ),
+      );
+    }
+
+    if (onlineResult.status === 'fulfilled') {
+      successfulPurchaseChannels.add('costco_com');
+      importedPurchases.push(...onlineResult.value.purchases);
+      const onlineDiagnostic = sanitizeSourceDiagnostic(
+        onlineResult.value.diagnostic,
+        onlineResult.value.failedDetailBatches > 0 ? 'error' : undefined,
+      );
+      purchaseSourceDiagnostics.push(onlineDiagnostic);
+      purchaseSourceFailure ||=
+        onlineResult.value.failedDetailBatches > 0 ||
+        onlineDiagnostic.status === 'error';
+    } else {
+      purchaseSourceFailure = true;
+      authImplicated ||= onlineResult.reason instanceof AuthRequiredError;
+      purchaseSourceDiagnostics.push(
+        sourceDiagnostic(
+          null,
+          'costco_online_orders',
+          'error',
+          now().toISOString(),
+          onlineResult.reason instanceof AuthRequiredError
+            ? 'Costco.com order authorization expired.'
+            : failureDiagnostic(
+                'Costco.com order retrieval failed',
+                onlineResult.reason,
+              ),
+        ),
+      );
+    }
+
+    if (successfulPurchaseChannels.size === 0) {
+      const diagnostic = purchaseSourceDiagnostics
+        .map(({ message }) => message)
+        .join(' ');
+      if (authImplicated) {
+        const authSummary = await authRequiredSummary(
           dependencies.localNotifier,
           startedAt,
           now,
         );
         return finish(
-          summary,
+          { ...authSummary, ...(diagnostic ? { diagnostic } : {}) },
           [],
-          [
-            sourceDiagnostic(
-              null,
-              'costco_receipts',
-              'error',
-              summary.finishedAt,
-              'Receipt authorization expired.',
-            ),
-          ],
+          purchaseSourceDiagnostics,
         );
       }
       const summary = emptySummary(
@@ -241,32 +318,27 @@ async function executeBegunRun(
         now().toISOString(),
         'failure',
         emptyNotificationResults(),
-        failureDiagnostic('Receipt retrieval failed', error),
+        diagnostic || 'Purchase retrieval failed.',
       );
-      return finish(
-        summary,
-        [],
-        [
-          sourceDiagnostic(
-            null,
-            'costco_receipts',
-            'error',
-            summary.finishedAt,
-            summary.diagnostic ?? 'Receipt retrieval failed.',
-          ),
-        ],
-      );
+      return finish(summary, [], purchaseSourceDiagnostics);
     }
 
-    const purchases = normalizeReceipts(
-      adaptCostcoReceipts(rawReceipts),
-      started,
-    );
-    dependencies.database.upsertPurchases(purchases);
-    const recentPurchases = dependencies.database.recentPurchases(
-      `${dateDaysBefore(started, dependencies.config.adjustmentWindowDays)}T00:00:00.000Z`,
-    );
+    if (successfulPurchaseChannels.size < 2) purchaseSourceFailure = true;
+    dependencies.database.upsertPurchases(importedPurchases);
+    const recentPurchases = dependencies.database
+      .recentPurchases(
+        `${dateDaysBefore(started, dependencies.config.adjustmentWindowDays)}T00:00:00.000Z`,
+      )
+      .filter((purchase) =>
+        successfulPurchaseChannels.has(purchase.purchaseChannel),
+      );
     const requests = uniquePriceRequests(recentPurchases);
+    const warehousePurchases = recentPurchases.filter(
+      (purchase) => purchase.purchaseChannel === 'warehouse',
+    );
+    const onlinePurchases = recentPurchases.filter(
+      (purchase) => purchase.purchaseChannel === 'costco_com',
+    );
 
     let observations: PriceObservation[];
     let priceEvidence: ReportPriceEvidenceResult;
@@ -283,16 +355,25 @@ async function executeBegunRun(
         timeoutMilliseconds: EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS,
       };
       if (dependencies.fetchReportPriceEvidence) {
-        priceEvidence = await dependencies.fetchReportPriceEvidence(
+        const fetchedEvidence = await dependencies.fetchReportPriceEvidence(
           requests,
           priceOptions,
         );
-        observations = priceEvidence.items.map((item) =>
-          toWarehouseObservation(item, startedAt),
-        );
+        priceEvidence = {
+          ...fetchedEvidence,
+          diagnostics: fetchedEvidence.diagnostics.map((diagnostic) =>
+            sanitizeSourceDiagnostic(diagnostic),
+          ),
+        };
+        observations = priceEvidence.items
+          .filter((item) => item.purchaseChannel === 'warehouse')
+          .map((item) => toWarehouseObservation(item, startedAt));
       } else {
+        const warehouseRequests = requests.filter(
+          (request) => request.purchaseChannel === 'warehouse',
+        );
         observations = await dependencies.fetchWarehousePrices(
-          requests,
+          warehouseRequests,
           priceOptions,
         );
         priceEvidence = fallbackPriceEvidence(observations, startedAt);
@@ -307,13 +388,16 @@ async function executeBegunRun(
           failureDiagnostic('Price check failed', error),
         ),
         purchasesProcessed: recentPurchases.length,
+        warehousePurchasesProcessed: warehousePurchases.length,
+        onlinePurchasesProcessed: onlinePurchases.length,
       };
       return finish(
         summary,
         [],
         [
+          ...purchaseSourceDiagnostics,
           sourceDiagnostic(
-            'warehouse',
+            null,
             'price_sources',
             'error',
             summary.finishedAt,
@@ -324,21 +408,29 @@ async function executeBegunRun(
     }
 
     dependencies.database.recordPriceObservations(observations);
-    const candidates = findAdjustments(
-      recentPurchases,
+    const warehouseCandidates = findAdjustments(
+      warehousePurchases,
       observations,
       started,
       dependencies.config,
     );
+    const onlineCandidates = findOnlineAdjustments(
+      onlinePurchases,
+      priceEvidence.items,
+      started,
+      dependencies.config,
+    );
+    const verifiedCandidates = [...warehouseCandidates, ...onlineCandidates];
     const reportRows = fullReportRows(
       recentPurchases,
       observations,
       priceEvidence,
       started,
       dependencies.config,
+      new Set(onlineCandidates.map(({ purchase }) => purchase.id)),
     );
     const estimatedOpportunities = estimatedCandidates(reportRows);
-    const alertCandidates = [...candidates, ...estimatedOpportunities];
+    const alertCandidates = [...verifiedCandidates, ...estimatedOpportunities];
     const localSelections = selectionsForChannel(
       dependencies.database,
       'local',
@@ -360,17 +452,29 @@ async function executeBegunRun(
       emailSelections,
       deliveredPurchaseIds,
     );
-    const unresolvedPrices = observations.filter(
+    const warehouseUnresolvedPrices = observations.filter(
       (observation) => observation.unresolvedReason !== null,
     ).length;
-    const hasBatchFailure = observations.some(
-      (observation) => observation.unresolvedReason === 'batch_failed',
+    const onlineUnresolvedPrices = onlineUnresolvedPriceCount(
+      requests,
+      priceEvidence,
     );
+    const unresolvedPrices = warehouseUnresolvedPrices + onlineUnresolvedPrices;
+    const hasBatchFailure =
+      observations.some(
+        (observation) => observation.unresolvedReason === 'batch_failed',
+      ) ||
+      priceEvidence.items.some(
+        (item) =>
+          item.purchaseChannel === 'costco_com' &&
+          item.prices.costcoCom.unavailableReason === 'batch_failed',
+      );
     const hasSourceFailure = priceEvidence.diagnostics.some(
       (diagnostic) => diagnostic.status === 'error',
     );
     const notifications = { email, local };
     const outcome =
+      purchaseSourceFailure ||
       hasBatchFailure ||
       hasSourceFailure ||
       local.error !== null ||
@@ -378,8 +482,11 @@ async function executeBegunRun(
         ? 'partial_failure'
         : 'success';
     const diagnostics = [
+      ...purchaseSourceDiagnostics
+        .filter(({ status }) => status === 'error')
+        .map(({ message }) => message),
       ...(hasBatchFailure
-        ? ['One or more warehouse price batches failed or timed out.']
+        ? ['One or more price batches failed or timed out.']
         : []),
       ...(hasSourceFailure
         ? ['One or more comparison price sources failed.']
@@ -393,7 +500,7 @@ async function executeBegunRun(
     ];
     const summary: RunSummary = {
       alertsSent: deliveredPurchaseIds.size,
-      candidatesFound: candidates.length,
+      candidatesFound: verifiedCandidates.length,
       ...(estimatedOpportunities.length === 0
         ? {}
         : { estimatedOpportunitiesFound: estimatedOpportunities.length }),
@@ -401,21 +508,30 @@ async function executeBegunRun(
       notifications,
       observationsRecorded: observations.length,
       outcome,
+      onlinePurchasesProcessed: onlinePurchases.length,
+      onlineUnresolvedPrices,
       purchasesProcessed: recentPurchases.length,
       startedAt,
       unresolvedPrices,
+      warehousePurchasesProcessed: warehousePurchases.length,
+      warehouseUnresolvedPrices,
       ...(diagnostics.length === 0
         ? {}
         : { diagnostic: diagnostics.join(' ') }),
     };
-    return finish(summary, reportRows, priceEvidence.diagnostics, () => {
-      if (local.error === null) {
-        persistSelections(dependencies.database, 'local', localSelections);
-      }
-      if (email.error === null) {
-        persistSelections(dependencies.database, 'email', emailSelections);
-      }
-    });
+    return finish(
+      summary,
+      reportRows,
+      [...purchaseSourceDiagnostics, ...priceEvidence.diagnostics],
+      () => {
+        if (local.error === null) {
+          persistSelections(dependencies.database, 'local', localSelections);
+        }
+        if (email.error === null) {
+          persistSelections(dependencies.database, 'email', emailSelections);
+        }
+      },
+    );
   } catch (error) {
     if (terminalState === 'idle') {
       const summary = emptySummary(
@@ -462,22 +578,26 @@ async function writeTerminalReport(
 }
 
 function fullReportRows(
-  purchases: readonly import('../domain/types.js').Purchase[],
+  purchases: readonly Purchase[],
   observations: readonly PriceObservation[],
   evidence: ReportPriceEvidenceResult,
   now: Date,
   config: AppConfig,
+  onlineCandidatePurchaseIds: ReadonlySet<string>,
 ): FullRunReport['rows'] {
   const evidenceByKey = new Map(
     evidence.items.map((item) => [priceKey(item), item.prices]),
   );
   return buildReportRows(purchases, observations, now, config).map((row) => {
     const currentEvidence = evidenceByKey.get(priceKey(row.purchase));
+    const isOnline = row.purchase.purchaseChannel === 'costco_com';
     const prices: ReportPriceChannels = {
       warehouse:
         currentEvidence?.warehouse ??
         reportWarehouseObservation(row.warehousePrice),
-      receiptHistory: laterReceiptEvidence(row.purchase, purchases),
+      receiptHistory: isOnline
+        ? unavailableReportPrice('receipt_history', 'not_applicable')
+        : laterReceiptEvidence(row.purchase, purchases),
       warehouseSavings:
         currentEvidence?.warehouseSavings ??
         unavailableReportPrice('warehouse_savings', 'source_not_configured'),
@@ -499,6 +619,7 @@ function fullReportRows(
         ? null
         : row.purchase.paidUnitCents - sameDayWarehouseEstimateCents;
     const estimatedOpportunity =
+      !isOnline &&
       row.status !== 'candidate' &&
       !usableReportPrice(prices.warehouse) &&
       row.daysRemaining !== null &&
@@ -512,20 +633,63 @@ function fullReportRows(
       sameDayEstimatedDeltaCents > 0 &&
       sameDayEstimatedDeltaCents * row.purchase.quantity >=
         config.minimumSavingsCents;
+    const onlineStatus = isOnline
+      ? onlineReportStatus(row, prices.costcoCom, onlineCandidatePurchaseIds)
+      : null;
     return {
       purchase: row.purchase,
       prices,
-      sameDayWarehouseEstimateCents,
+      sameDayWarehouseEstimateCents: isOnline
+        ? null
+        : sameDayWarehouseEstimateCents,
       sameDayMarkupPercent: config.sameDayMarkupPercent,
-      sameDayEstimatedDeltaCents,
-      warehouseDeltaCents: row.warehouseDeltaCents,
+      sameDayEstimatedDeltaCents: isOnline ? null : sameDayEstimatedDeltaCents,
+      warehouseDeltaCents: isOnline ? null : row.warehouseDeltaCents,
       daysRemaining: row.daysRemaining,
-      status: estimatedOpportunity ? 'estimated_opportunity' : row.status,
-      reason: estimatedOpportunity
-        ? 'same_day_estimate_lower_manual_verification_required'
-        : row.reason,
+      status:
+        onlineStatus === null
+          ? estimatedOpportunity
+            ? 'estimated_opportunity'
+            : row.status
+          : onlineStatus.status,
+      reason:
+        onlineStatus === null
+          ? estimatedOpportunity
+            ? 'same_day_estimate_lower_manual_verification_required'
+            : row.reason
+          : onlineStatus.reason,
     };
   });
+}
+
+function onlineReportStatus(
+  row: ReturnType<typeof buildReportRows>[number],
+  price: ReportPriceObservation,
+  candidatePurchaseIds: ReadonlySet<string>,
+): Pick<FullRunReport['rows'][number], 'reason' | 'status'> {
+  if (
+    [
+      'invalid_config',
+      'invalid_purchase_timestamp',
+      'invalid_purchase_price',
+      'outside_adjustment_window',
+    ].includes(row.reason ?? '')
+  ) {
+    return { reason: row.reason, status: 'not_eligible' };
+  }
+  if (candidatePurchaseIds.has(row.purchase.id)) {
+    return { reason: null, status: 'candidate' };
+  }
+  if (!usableReportPrice(price)) {
+    return { reason: 'costco_com_price_unavailable', status: 'not_eligible' };
+  }
+  return {
+    reason:
+      price.unitPriceCents >= row.purchase.paidUnitCents
+        ? 'no_price_drop'
+        : 'below_savings_threshold',
+    status: 'not_eligible',
+  };
 }
 
 function usableReportPrice(
@@ -543,6 +707,7 @@ function estimatedCandidates(
 ): import('../domain/types.js').AdjustmentCandidate[] {
   return rows.flatMap((row) => {
     if (
+      row.purchase.purchaseChannel !== 'warehouse' ||
       row.status !== 'estimated_opportunity' ||
       row.sameDayWarehouseEstimateCents === null ||
       row.sameDayEstimatedDeltaCents === null ||
@@ -575,13 +740,14 @@ function estimatedCandidates(
 }
 
 function laterReceiptEvidence(
-  purchase: import('../domain/types.js').Purchase,
-  purchases: readonly import('../domain/types.js').Purchase[],
+  purchase: Purchase,
+  purchases: readonly Purchase[],
 ): ReportPriceObservation {
   const purchasedAt = Date.parse(purchase.purchasedAt);
   const later = purchases
     .filter(
       (candidate) =>
+        candidate.purchaseChannel === 'warehouse' &&
         candidate.itemNumber === purchase.itemNumber &&
         candidate.warehouseNumber === purchase.warehouseNumber &&
         Date.parse(candidate.purchasedAt) > purchasedAt,
@@ -695,11 +861,37 @@ function sourceDiagnostic(
   return { channel, message, observedAt, source, status };
 }
 
+function sanitizeSourceDiagnostic(
+  diagnostic: ReportSourceDiagnostic,
+  status?: ReportSourceDiagnostic['status'],
+): ReportSourceDiagnostic {
+  return {
+    ...diagnostic,
+    message: sanitizeDiagnosticText(diagnostic.message),
+    ...(status === undefined ? {} : { status }),
+  };
+}
+
 function priceKey(value: {
   readonly itemNumber: string;
+  readonly purchaseChannel: PurchaseChannel;
   readonly warehouseNumber: string;
 }): string {
-  return `${value.itemNumber}\u0000${value.warehouseNumber}`;
+  return `${value.purchaseChannel}\u0000${value.itemNumber}\u0000${value.warehouseNumber}`;
+}
+
+function onlineUnresolvedPriceCount(
+  requests: readonly PriceRequest[],
+  evidence: ReportPriceEvidenceResult,
+): number {
+  const evidenceByKey = new Map(
+    evidence.items.map((item) => [priceKey(item), item]),
+  );
+  return requests.filter((request) => {
+    if (request.purchaseChannel !== 'costco_com') return false;
+    const item = evidenceByKey.get(priceKey(request));
+    return item === undefined || !usableReportPrice(item.prices.costcoCom);
+  }).length;
 }
 
 async function authRequiredSummary(

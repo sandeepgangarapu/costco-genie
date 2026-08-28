@@ -104,11 +104,15 @@ export interface RunSummary {
   readonly diagnostic?: string;
   readonly outcome: RunOutcome;
   readonly purchasesProcessed: number;
+  readonly warehousePurchasesProcessed?: number;
+  readonly onlinePurchasesProcessed?: number;
   readonly observationsRecorded: number;
   readonly candidatesFound: number;
   readonly estimatedOpportunitiesFound?: number;
   readonly alertsSent: number;
   readonly unresolvedPrices: number;
+  readonly warehouseUnresolvedPrices?: number;
+  readonly onlineUnresolvedPrices?: number;
   readonly notifications?: NotificationResults;
   readonly reportFiles?: FullReportFiles;
 }
