@@ -228,7 +228,7 @@ export interface ReportPriceEvidenceItem {
   readonly purchaseChannel: PurchaseChannel;
   readonly itemNumber: string;
   readonly warehouseNumber: string;
-  readonly prices: ReportPriceChannels;
+  readonly prices: Omit<ReportPriceChannels, 'receiptHistory'>;
 }
 ```
 
@@ -280,6 +280,7 @@ export interface AdjustmentCandidate {
 
 **Files:**
 
+- Modify: `src/domain/types.ts`
 - Modify: `src/app/run.ts`
 - Modify: `src/notifications/report.ts`
 - Modify: `tests/run.test.ts`
