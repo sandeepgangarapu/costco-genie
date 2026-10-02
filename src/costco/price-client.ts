@@ -320,28 +320,6 @@ export async function fetchReportPriceEvidence(
     fetchFn,
     now: () => observed,
   });
-  const savings =
-    warehouseRequests.length === 0
-      ? {
-          items: [],
-          diagnostic: notApplicableDiagnostic(
-            'warehouse_savings',
-            SAVINGS_SOURCE,
-            observedAt,
-          ),
-        }
-      : await fetchSavingsPrices(
-          warehouseRequests,
-          observed,
-          fetchFn,
-          (
-            options.createTimeoutSignal ??
-            ((milliseconds) => AbortSignal.timeout(milliseconds))
-          )(
-            options.timeoutMilliseconds ??
-              EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS,
-          ),
-        );
   const sameDay =
     warehouseRequests.length === 0
       ? {
@@ -353,6 +331,35 @@ export async function fetchReportPriceEvidence(
           ),
         }
       : await fetchSameDayEvidence(warehouseRequests, options, observed);
+  const sameDayByKey = new Map(
+    sameDay.items.map((value) => [sourcePriceKey(value), value]),
+  );
+  const savingsRequests = warehouseRequests.filter((request) => {
+    const price = sameDayByKey.get(sourcePriceKey(request));
+    return price === undefined || !usableReportPrice(price);
+  });
+  const savings =
+    savingsRequests.length === 0
+      ? {
+          items: [],
+          diagnostic: notApplicableDiagnostic(
+            'warehouse_savings',
+            SAVINGS_SOURCE,
+            observedAt,
+          ),
+        }
+      : await fetchSavingsPrices(
+          savingsRequests,
+          observed,
+          fetchFn,
+          (
+            options.createTimeoutSignal ??
+            ((milliseconds) => AbortSignal.timeout(milliseconds))
+          )(
+            options.timeoutMilliseconds ??
+              EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS,
+          ),
+        );
   const warehouseByKey = new Map(
     warehouseObservations.map((value) => [sourcePriceKey(value), value]),
   );
@@ -361,9 +368,6 @@ export async function fetchReportPriceEvidence(
   );
   const savingsByKey = new Map(
     savings.items.map((value) => [sourcePriceKey(value), value]),
-  );
-  const sameDayByKey = new Map(
-    sameDay.items.map((value) => [sourcePriceKey(value), value]),
   );
   const items = uniqueRequests.map((request) => {
     const sourceKey = sourcePriceKey(request);
@@ -779,12 +783,13 @@ function parseHydrationSavings(
       block,
     )?.[1] ?? null;
   const append = /"append_text":"([^"]+)"/u.exec(block)?.[1]?.trim() ?? '';
+  const prepend = /"prepend_text":"([^"]+)"/u.exec(block)?.[1]?.trim() ?? '';
   const cents = parseWirePriceToCents(price);
   const promotion =
     price === null
       ? append || null
       : `$${price}${append === '' ? '' : ` ${append}`}`;
-  if (cents === null || cents <= 0) {
+  if (cents === null || cents <= 0 || /^save\b/iu.test(prepend)) {
     return evidence('final_price_not_listed', promotion);
   }
   return {

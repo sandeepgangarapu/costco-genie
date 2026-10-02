@@ -772,6 +772,57 @@ describe('fetchReportPriceEvidence', () => {
     );
   });
 
+  it('does not treat a Save $7 amount as a $7 warehouse price', async () => {
+    const savingsHtml = `<p>Valid 9/21/26 - 10/18/26</p><script>self.__next_f.push("{\\"itemNumber\\":\\"1937993\\",\\"applicability\\":\\"warehouse_online\\",\\"pricesOffCSObject\\":[{\\"value\\":[\\"7\\"],\\"prepend_text\\":\\"Save\\"}]}")</script>`;
+    const fetchFn: typeof fetch = async (input) =>
+      String(input).includes('/warehouse-savings')
+        ? new Response(savingsHtml)
+        : productResponse([]);
+    const result = await fetchReportPriceEvidence([request('1937993')], {
+      fetchFn,
+      now: () => new Date('2026-10-02T21:48:11.099Z'),
+    });
+    expect(result.items[0]?.prices.warehouseSavings).toMatchObject({
+      unitPriceCents: null,
+      unavailableReason: 'final_price_not_listed',
+    });
+    expect(result.items[0]?.prices.warehouse.unitPriceCents).toBeNull();
+  });
+
+  it('uses available Same-Day evidence before looking at Warehouse Savings', async () => {
+    let savingsRequests = 0;
+    const fetchFn: typeof fetch = async (input) => {
+      if (String(input).includes('/warehouse-savings')) {
+        savingsRequests += 1;
+        return new Response(
+          '<article data-item-number="1937993" data-start-date="2026-09-21" data-end-date="2026-10-18" data-applicability="warehouse" data-final-price="$7">$7</article>',
+        );
+      }
+      return productResponse([]);
+    };
+    const result = await fetchReportPriceEvidence([request('1937993', '110')], {
+      fetchFn,
+      now: () => new Date('2026-10-02T21:48:11.099Z'),
+      sameDayMarkupPercent: 13.5,
+      sameDayPostalCode: '98029',
+      sameDayPriceFetcher: async () => [
+        {
+          channel: 'same_day',
+          itemNumber: '1937993',
+          warehouseNumber: '110',
+          observedAt: '2026-10-02T21:48:11.099Z',
+          promotionText: null,
+          source: 'same_day_guest_storefront_zip_98029',
+          unavailableReason: null,
+          unitPriceCents: 2269,
+        },
+      ],
+    });
+    expect(savingsRequests).toBe(0);
+    expect(result.items[0]?.prices.warehouse.unitPriceCents).toBeNull();
+    expect(result.items[0]?.prices.sameDay.unitPriceCents).toBe(2269);
+  });
+
   it('batches Costco.com per warehouse with fresh deadlines and keeps successful batches', async () => {
     const requests = [
       ...Array.from({ length: 26 }, (_, index) =>
