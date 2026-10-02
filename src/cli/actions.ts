@@ -15,7 +15,12 @@ import {
   type RunDependencies,
   type RunLock,
 } from '../app/run.js';
-import { DEFAULT_CONFIG, loadConfig } from '../config/config.js';
+import {
+  DEFAULT_CONFIG,
+  loadConfig,
+  readConfigWithoutMutation,
+  type AppConfig,
+} from '../config/config.js';
 import { appPaths, type AppPaths } from '../config/paths.js';
 import {
   openLoginBrowser,
@@ -34,6 +39,7 @@ import {
 } from '../lib/filesystem.js';
 import { FileRunLock } from '../lib/process.js';
 import { AppleMailNotifier } from '../notifications/apple-mail.js';
+import { SmtpMailNotifier } from '../notifications/smtp-mail.js';
 import { MacOsNotifier } from '../notifications/macos.js';
 import { writeFullReport } from '../notifications/full-report.js';
 import {
@@ -69,7 +75,7 @@ export interface DefaultCliDependencies {
   readonly compiledCliPath: string;
   readonly createLocalNotifier: () => LocalNotifier;
   readonly createLock: (path: string) => RunLock;
-  readonly createMailNotifier: () => MailNotifier;
+  readonly createMailNotifier: (config: AppConfig) => MailNotifier;
   readonly fetchReceipts: RunDependencies['fetchReceipts'];
   readonly fetchOnlineOrderPurchases: RunDependencies['fetchOnlineOrderPurchases'];
   readonly fetchWarehousePrices: RunDependencies['fetchWarehousePrices'];
@@ -124,6 +130,7 @@ export function createDefaultCliActions(
           nodePath: dependencies.nodePath,
           scheduledHour: config.scheduledHour,
           scheduledMinute: config.scheduledMinute,
+          scheduledWeekday: config.scheduledWeekday,
           workingDirectory: dependencies.projectDirectory,
         },
         uid: dependencies.getUid(),
@@ -149,7 +156,7 @@ export function createDefaultCliActions(
               fetchWarehousePrices: dependencies.fetchWarehousePrices,
               fetchReportPriceEvidence: dependencies.fetchReportPriceEvidence,
               localNotifier: dependencies.createLocalNotifier(),
-              mailNotifier: dependencies.createMailNotifier(),
+              mailNotifier: dependencies.createMailNotifier(config),
               readCostcoTokens: () => dependencies.readCostcoTokens(paths),
               writeFullReport: (report) => writeFullReport(paths, report),
             },
@@ -220,6 +227,7 @@ async function runDoctor(
   paths: AppPaths,
   dependencies: DefaultCliDependencies,
 ): Promise<DoctorReport> {
+  const config = readConfigWithoutMutation(paths);
   return diagnoseEnvironment({
     checkBrowserProfile: () => {
       if (
@@ -296,13 +304,24 @@ async function runDoctor(
     nodeVersion: dependencies.nodeVersion,
     platform: dependencies.platform,
     checkMail: () =>
-      dependencies.mailApplicationExists()
-        ? {
-            detail:
-              'Mail is installed; account and Automation access are not verified by offline doctor',
-            ok: true,
-          }
-        : { detail: 'Apple Mail is not installed', ok: false },
+      config.smtpConfigPath !== null
+        ? dependencies.fileExists(config.smtpConfigPath) &&
+          dependencies.isRegularFile(config.smtpConfigPath)
+          ? {
+              detail: `SMTP configuration is present at ${config.smtpConfigPath}; delivery is verified by a live run`,
+              ok: true,
+            }
+          : {
+              detail: `SMTP configuration is missing at ${config.smtpConfigPath}`,
+              ok: false,
+            }
+        : dependencies.mailApplicationExists()
+          ? {
+              detail:
+                'Mail is installed; account and Automation access are not verified by offline doctor',
+              ok: true,
+            }
+          : { detail: 'Apple Mail is not installed', ok: false },
   });
 }
 
@@ -312,7 +331,10 @@ function defaultCliDependencies(): DefaultCliDependencies {
     compiledCliPath: compiledCliPath(),
     createLocalNotifier: () => new MacOsNotifier(),
     createLock: (path) => new FileRunLock(path),
-    createMailNotifier: () => new AppleMailNotifier(),
+    createMailNotifier: (config) =>
+      config.smtpConfigPath === null
+        ? new AppleMailNotifier()
+        : new SmtpMailNotifier(config.smtpConfigPath),
     fetchOnlineOrderPurchases,
     fetchReceipts: (tokens, startDate, endDate, signal) =>
       fetchReceipts(tokens, startDate, endDate, fetch, signal),

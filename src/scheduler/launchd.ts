@@ -26,6 +26,7 @@ export interface LaunchAgentRenderOptions {
   readonly nodePath: string;
   readonly scheduledHour?: number;
   readonly scheduledMinute?: number;
+  readonly scheduledWeekday?: number | null;
   readonly workingDirectory: string;
 }
 
@@ -100,6 +101,7 @@ export function renderLaunchAgent(options: LaunchAgentRenderOptions): string {
   validateRenderOptions(options);
   const hour = options.scheduledHour ?? 9;
   const minute = options.scheduledMinute ?? 0;
+  const weekday = options.scheduledWeekday;
   const stdoutPath = join(options.logDirectory, 'stdout.log');
   const stderrPath = join(options.logDirectory, 'stderr.log');
 
@@ -119,9 +121,10 @@ export function renderLaunchAgent(options: LaunchAgentRenderOptions): string {
   <key>WorkingDirectory</key>
   <string>${escapeXml(options.workingDirectory)}</string>
   <key>RunAtLoad</key>
-  <true/>
+  <${weekday == null ? 'true' : 'false'}/>
   <key>StartCalendarInterval</key>
   <dict>
+${weekday == null ? '' : `    <key>Weekday</key>\n    <integer>${String(weekday)}</integer>\n`}
     <key>Hour</key>
     <integer>${String(hour)}</integer>
     <key>Minute</key>
@@ -266,6 +269,9 @@ function validateRenderOptions(options: LaunchAgentRenderOptions): void {
   }
   validateCalendarValue('scheduledHour', options.scheduledHour ?? 9, 23);
   validateCalendarValue('scheduledMinute', options.scheduledMinute ?? 0, 59);
+  if (options.scheduledWeekday != null) {
+    validateCalendarValue('scheduledWeekday', options.scheduledWeekday, 6);
+  }
 }
 
 function validateCalendarValue(

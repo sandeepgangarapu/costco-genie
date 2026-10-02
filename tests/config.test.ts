@@ -36,6 +36,7 @@ describe('loadConfig', () => {
     expect(loadConfig(paths)).toEqual({
       adjustmentWindowDays: 30,
       daysToFetch: 35,
+      emailEveryRun: false,
       emailRecipient: null,
       minimumSavingsCents: 1,
       priceBatchSize: 25,
@@ -44,7 +45,9 @@ describe('loadConfig', () => {
       sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
       scheduledHour: 9,
       scheduledMinute: 0,
+      scheduledWeekday: null,
       scheduledIntervalDays: 1,
+      smtpConfigPath: null,
     });
     expect(existsSync(paths.dataDir)).toBe(true);
     expect(existsSync(paths.browserProfileDir)).toBe(true);
@@ -131,6 +134,8 @@ describe('loadConfig', () => {
     { adjustmentWindowDays: 0 },
     { scheduledHour: 24 },
     { scheduledMinute: 60 },
+    { scheduledWeekday: 7 },
+    { smtpConfigPath: 'relative.json' },
     { scheduledIntervalDays: 0 },
     { priceBatchSize: 26 },
     { minimumSavingsCents: -1 },

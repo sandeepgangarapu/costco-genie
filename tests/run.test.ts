@@ -95,6 +95,7 @@ class FakeLocalNotifier {
 
 class FakeMailNotifier {
   readonly messages: Array<{
+    html?: string;
     recipient: string;
     subject: string;
     text: string;
@@ -107,9 +108,14 @@ class FakeMailNotifier {
     return 'self@example.com';
   }
 
-  async send(recipient: string, subject: string, text: string): Promise<void> {
+  async send(
+    recipient: string,
+    subject: string,
+    text: string,
+    html?: string,
+  ): Promise<void> {
     if (this.error) throw this.error;
-    this.messages.push({ recipient, subject, text });
+    this.messages.push({ recipient, subject, text, ...(html ? { html } : {}) });
   }
 }
 
@@ -589,6 +595,27 @@ describe('FileRunLock', () => {
 });
 
 describe('runPriceCheck', () => {
+  it('emails a weekly report when no price drop is found', async () => {
+    const deps = dependencies({
+      config: { ...DEFAULT_CONFIG, emailEveryRun: true },
+      fetchReceipts: async () => [],
+    });
+
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+
+    expect(summary.outcome).toBe('success');
+    expect(deps.mailNotifier.messages).toEqual([
+      expect.objectContaining({
+        recipient: 'self@example.com',
+        subject: 'Costco weekly price report',
+        text: expect.stringContaining('Items considered: 0'),
+        html: expect.stringContaining('<h2>Overall stats</h2>'),
+      }),
+    ]);
+    expect(deps.localNotifier.messages).toEqual([]);
+    deps.database.close();
+  });
+
   it('starts both purchase imports after one token read with the same configured window', async () => {
     const tokens = { clientId: 'shared-client', idToken: 'shared-token' };
     const calls: Array<{
@@ -2164,9 +2191,14 @@ describe('runPriceCheck', () => {
   });
 
   it('skips a scheduled run when the previous success is less than 20 hours old', async () => {
+    let reportWrites = 0;
     const deps = dependencies({
       fetchReceipts: async () => {
         throw new Error('receipt access must not happen');
+      },
+      writeReport: async () => {
+        reportWrites += 1;
+        throw new Error('a skipped run must preserve the latest report');
       },
     });
     const prior = {
@@ -2187,6 +2219,7 @@ describe('runPriceCheck', () => {
     });
 
     expect(summary.outcome).toBe('skipped');
+    expect(reportWrites).toBe(0);
     expect(deps.localNotifier.messages).toEqual([]);
     expect(deps.mailNotifier.messages).toEqual([]);
     deps.database.close();

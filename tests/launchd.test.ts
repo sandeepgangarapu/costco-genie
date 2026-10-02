@@ -80,6 +80,24 @@ describe('renderLaunchAgent', () => {
     expect(plist).toContain('<string>--scheduled</string>');
   });
 
+  it('renders a Friday-only agent without a login run', async () => {
+    const plist = renderLaunchAgent({
+      ...renderOptions,
+      scheduledHour: 16,
+      scheduledWeekday: 5,
+    });
+    const plistPath = join(temporaryDirectory(), 'friday.plist');
+    writeFileSync(plistPath, plist);
+
+    await expect(
+      execFile('/usr/bin/plutil', ['-lint', plistPath]),
+    ).resolves.toMatchObject({ stdout: expect.stringContaining('OK') });
+    expect(plist).toContain('<key>RunAtLoad</key>\n  <false/>');
+    expect(plist).toContain('<key>Weekday</key>\n    <integer>5</integer>');
+    expect(plist).toContain('<key>Hour</key>\n    <integer>16</integer>');
+    expect(plist).toContain('<string>--scheduled</string>');
+  });
+
   it.each([
     ['nodePath', 'node'],
     ['cliPath', 'dist/cli.js'],

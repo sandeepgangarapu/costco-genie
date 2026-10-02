@@ -597,6 +597,26 @@ describe('fetchReportPriceEvidence', () => {
     ).not.toContainEqual(expect.objectContaining({ status: 'error' }));
   });
 
+  it.each([
+    ['29.99000', 2999],
+    ['29.90000', 2990],
+    ['29.99900', null],
+  ])(
+    'parses Costco.com wire price %s as %s cents',
+    async (wirePrice, cents) => {
+      const result = await fetchReportPriceEvidence(
+        [onlineRequest('1937995')],
+        {
+          fetchFn: async () =>
+            productResponse([product('1937995', wirePrice, 'ShipIt')]),
+          now: () => new Date(observedAt),
+        },
+      );
+
+      expect(result.items[0]?.prices.costcoCom.unitPriceCents).toBe(cents);
+    },
+  );
+
   it('rejects an invalid batch size before an online-only catalog lookup', async () => {
     let calls = 0;
 

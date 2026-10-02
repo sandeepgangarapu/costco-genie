@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 
 import type { ReportPriceObservation } from '../domain/types.js';
 import { parseMoneyToCents } from '../lib/money.js';
+import { chromeBinaryPath } from './chrome-path.js';
 
 const SAME_DAY_SEARCH_URL = 'https://sameday.costco.com/store/costco/s';
 const DEFAULT_TIMEOUT_MILLISECONDS = 30_000;
@@ -224,7 +225,10 @@ async function lookupSearchTerm(
 }
 
 async function launchPlaywrightBrowser(): Promise<SameDayBrowser> {
-  return chromium.launch({ headless: true });
+  return chromium.launch({
+    executablePath: chromeBinaryPath(),
+    headless: true,
+  });
 }
 
 function searchUrl(searchTerm: string): string {

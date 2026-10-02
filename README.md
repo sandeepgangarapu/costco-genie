@@ -21,9 +21,9 @@ It repeats this automatically every morning (or on any interval you choose). Ide
 
 **What you need:**
 
-- A Mac running macOS, with **Apple Mail** set up and at least one enabled account
+- A Mac running macOS, with **Apple Mail** set up and at least one enabled account, or an existing SMTP configuration file
 - **NVM** (recommended), or **Node.js 22.13.0 or newer** with npm
-- **Google Chrome** (used once so you can sign in to Costco; your password is never seen or stored by the tool)
+- **Google Chrome** in `/Applications` or `~/Applications` (used for Costco sign-in and Same-Day guest price estimates; your password is never seen or stored by the tool)
 - **Xcode Command Line Tools**, if `npm` needs to compile native modules (`xcode-select --install`)
 
 The checked-in `./costco` launcher is the only command entry point you need. When NVM is installed, it installs and selects the Node version pinned in `.nvmrc`. It also refreshes native dependencies when the Node ABI or lockfile changes, builds the CLI, and then runs the requested command. This prevents a dependency compiled by one Node version from being loaded by another.
@@ -91,19 +91,22 @@ You do not need to configure anything to start. If you want to change behavior, 
 
 Defaults:
 
-| Setting                        | Default                                 | Meaning                                                                               |
-| ------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------- |
-| `daysToFetch`                  | `35`                                    | How many days of warehouse receipts and Costco.com orders to import                   |
-| `adjustmentWindowDays`         | `30`                                    | Purchases within this many calendar days are adjustment candidates                    |
-| `scheduledHour`                | `9`                                     | Hour of day for scheduled runs (local time)                                           |
-| `scheduledMinute`              | `0`                                     | Minute of day for scheduled runs                                                      |
-| `scheduledIntervalDays`        | `1`                                     | Minimum days between scheduled runs (e.g., `3` = roughly every 3 days)                |
-| `emailRecipient`               | `null`                                  | Where alert emails go; defaults to the first address on an enabled Apple Mail account |
-| `priceBatchSize`               | `25`                                    | Item numbers checked per sequential price batch (max 25)                              |
-| `minimumSavingsCents`          | `1`                                     | Smallest total purchase-line savings worth alerting about                             |
-| `sameDayMarkupPercent`         | `13.5`                                  | Markup applied to warehouse prices for Same-Day estimates                             |
-| `sameDayPostalCode`            | `'98029'`                               | Postal code used for Same-Day price estimates                                         |
-| `sameDayRepresentativeAddress` | `'2520 NE Park Dr, Issaquah, WA 98029'` | Representative warehouse address for Same-Day estimates                               |
+| Setting                        | Default                                 | Meaning                                                                                |
+| ------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------- |
+| `daysToFetch`                  | `35`                                    | How many days of warehouse receipts and Costco.com orders to import                    |
+| `adjustmentWindowDays`         | `30`                                    | Purchases within this many calendar days are adjustment candidates                     |
+| `scheduledHour`                | `9`                                     | Hour of day for scheduled runs (local time)                                            |
+| `scheduledMinute`              | `0`                                     | Minute of day for scheduled runs                                                       |
+| `scheduledWeekday`             | `null`                                  | Optional weekday (`0` Sunday through `6` Saturday); `5` runs on Fridays                |
+| `scheduledIntervalDays`        | `1`                                     | Minimum days between scheduled runs (e.g., `3` = roughly every 3 days)                 |
+| `emailRecipient`               | `null`                                  | Where alert emails go; defaults to the first address on an enabled Apple Mail account  |
+| `emailEveryRun`                | `false`                                 | Send a summary with only potential savings after every completed check                 |
+| `smtpConfigPath`               | `null`                                  | Absolute path to a private SMTP JSON config; when set, email uses SMTP instead of Mail |
+| `priceBatchSize`               | `25`                                    | Item numbers checked per sequential price batch (max 25)                               |
+| `minimumSavingsCents`          | `1`                                     | Smallest total purchase-line savings worth alerting about                              |
+| `sameDayMarkupPercent`         | `13.5`                                  | Markup applied to warehouse prices for Same-Day estimates                              |
+| `sameDayPostalCode`            | `'98029'`                               | Postal code used for Same-Day price estimates                                          |
+| `sameDayRepresentativeAddress` | `'2520 NE Park Dr, Issaquah, WA 98029'` | Representative warehouse address for Same-Day estimates                                |
 
 The configuration contains non-secret settings only. After changing scheduling-related values (`scheduledHour`, `scheduledMinute`, `scheduledIntervalDays`), run `./costco install-agent` again.
 
@@ -131,7 +134,7 @@ For command help:
 
 ### Full reports
 
-Every terminal run writes owner-only JSON, CSV, and self-contained HTML reports under `~/.costco-price-matcher/reports/`. Timestamped files preserve individual runs; `latest.json`, `latest.csv`, `latest.html`, and `latest-manifest.json` identify the latest complete report set. Latest-file replacement is atomic, and partial delivery is cleaned up rather than advertised as a complete snapshot.
+Every completed check writes owner-only JSON, CSV, and self-contained HTML reports under `~/.costco-price-matcher/reports/`. A scheduled run skipped because of a recent successful check leaves the latest report intact. Timestamped files preserve individual runs; `latest.json`, `latest.csv`, `latest.html`, and `latest-manifest.json` identify the latest complete report set. Latest-file replacement is atomic, and partial delivery is cleaned up rather than advertised as a complete snapshot.
 
 The detailed purchase-line fields include purchase channel, receipt or order identifier, item number and description, purchase date, active quantity, paid unit price, comparison channel and price, unit delta, total potential savings, days remaining, status, reason, and each evidence channel. JSON uses schema version `2`. CSV and JSON use stable channel values such as `warehouse`, `costco_com`, and `same_day`; HTML uses friendly labels such as “Warehouse,” “Costco.com,” and “Same-Day estimate.” The report summary separates warehouse and Costco.com line coverage and includes source diagnostics, including `costco_online_orders`.
 
@@ -149,7 +152,7 @@ The probe reports the sample as resolved or unresolved; it does not claim genera
 
 Run `./costco install-agent`. The launcher selects the pinned supported Node runtime and builds the project before the agent is installed.
 
-The generated user LaunchAgent runs at login and daily at 09:00 by default. Its scheduled invocation uses a freshness check of four hours less than `scheduledIntervalDays` days (20 hours by default), so waking or logging in does not duplicate a recent successful run. With `scheduledIntervalDays` set to 3, a successful run suppresses the next two daily triggers and the next run happens on the third day at 09:00.
+The generated user LaunchAgent runs at login and daily at 09:00 by default. Its scheduled invocation uses a freshness check of four hours less than `scheduledIntervalDays` days (20 hours by default), so waking or logging in does not duplicate a recent successful run. With `scheduledIntervalDays` set to 3, a successful run suppresses the next two daily triggers and the next run happens on the third day at 09:00. When `scheduledWeekday` is set, the agent runs only on that weekday at the configured time and does not run at login. The same freshness check prevents a weekly run from repeating a recent manual check.
 
 The installer pins absolute paths to the current Node executable, compiled CLI, checkout, and logs. It rejects a missing/non-executable Node target, Node older than 22.13.0, or a missing compiled CLI. **Run `./costco install-agent` again after moving the checkout or changing, upgrading, or removing the pinned Node installation.**
 
@@ -174,6 +177,8 @@ Uninstall boots out `gui/<uid>/com.costco-price-matcher.daily` by label, so it c
 ### Apple Mail permission and delivery
 
 Alerts use the first address on an enabled Apple Mail account unless `emailRecipient` is set in the configuration. Mail content is deliberately plain text: Apple Mail's supported scripting property does not reliably turn an assigned string into HTML.
+
+To reuse an existing SMTP account, set `smtpConfigPath` to an absolute path to an owner-only JSON file containing `smtp_host`, `smtp_port`, `smtp_user`, `smtp_pass`, `email_from`, and `email_to`. The sender requires TLS on port 587 and uses implicit TLS on port 465. `emailRecipient` can override `email_to`. The SMTP password stays in that private file and is never copied into the LaunchAgent plist or repository. Set `emailEveryRun` to `true` to receive a summary after every completed check, including when no price drop is found. SMTP sends an HTML adjustment table with a plain-text table fallback. It uses Pacific time and shows the item name and number, original warehouse, paid and current unit prices, total potential savings, purchase date, days left, and price source. The email ends with totals for items considered, prices found, and potential adjustments, followed by the names of items with no current price. The full purchase-line report remains in the local HTML, CSV, and JSON files.
 
 On the first attempted delivery, macOS may ask whether the Node or terminal process can automate Mail. Allow it under **System Settings → Privacy & Security → Automation**. If the prompt appeared during a manual run but scheduled delivery still fails, inspect the logs and verify the relevant process has Mail permission. The tool never sends mail during `setup`, `status`, or `doctor`.
 

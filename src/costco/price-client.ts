@@ -168,7 +168,11 @@ function mapProduct(
 }
 
 function parseWirePriceToCents(value: unknown): number | null {
-  if (typeof value === 'string') return parseMoneyToCents(value);
+  if (typeof value === 'string') {
+    // Costco's product API can serialize cent prices with extra trailing zeros
+    // (for example, "29.99000"). Keep rejecting nonzero sub-cent precision.
+    return parseMoneyToCents(value.replace(/(\.\d{2})0+$/u, '$1'));
+  }
   if (typeof value === 'number' && Number.isFinite(value)) {
     return parseMoneyToCents(String(value));
   }

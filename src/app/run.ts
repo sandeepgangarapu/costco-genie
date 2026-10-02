@@ -19,6 +19,7 @@ import { inverseMarkupCents } from '../costco/same-day-client.js';
 import { adaptCostcoReceipts } from '../costco/receipt-client.js';
 import type { OnlineOrderFetchResult } from '../costco/online-order-client.js';
 import type {
+  AdjustmentCandidate,
   NotificationChannelResult,
   NotificationResults,
   FullRunReport,
@@ -35,6 +36,10 @@ import {
   renderCompactReport,
   renderTextReport,
 } from '../notifications/report.js';
+import {
+  renderWeeklyReportEmail,
+  renderWeeklyReportHtml,
+} from '../notifications/weekly-report-email.js';
 import type { FullReportFiles } from '../notifications/full-report.js';
 import type { AlertChannel, Database } from '../storage/database.js';
 
@@ -54,7 +59,12 @@ export interface LocalNotifier {
 
 export interface MailNotifier {
   resolveSelfRecipient(): Promise<string>;
-  send(recipient: string, subject: string, text: string): Promise<void>;
+  send(
+    recipient: string,
+    subject: string,
+    text: string,
+    html?: string,
+  ): Promise<void>;
 }
 
 type RunDatabase = Pick<
@@ -144,22 +154,8 @@ async function runLocked(
       emptyNotificationResults(),
     );
     const skippedRunId = dependencies.database.beginRun(startedAt);
-    const withReport = await writeTerminalReport(
-      dependencies,
-      skipped,
-      [],
-      [
-        sourceDiagnostic(
-          null,
-          'scheduler',
-          'unavailable',
-          skipped.finishedAt,
-          'Scheduled run skipped because a recent successful run is fresh.',
-        ),
-      ],
-    );
-    dependencies.database.finishRun(skippedRunId, withReport);
-    return withReport;
+    dependencies.database.finishRun(skippedRunId, skipped);
+    return skipped;
   }
 
   const runId = dependencies.database.beginRun(startedAt);
@@ -453,6 +449,15 @@ async function executeBegunRun(
       'email',
       alertCandidates,
     );
+    const warehouseUnresolvedPrices = warehouseUnresolvedPriceCount(
+      requests,
+      priceEvidence,
+    );
+    const onlineUnresolvedPrices = onlineUnresolvedPriceCount(
+      requests,
+      priceEvidence,
+    );
+    const unresolvedPrices = warehouseUnresolvedPrices + onlineUnresolvedPrices;
     const deliveredPurchaseIds = new Set<string>();
     const local = await deliverLocal(
       dependencies,
@@ -463,16 +468,10 @@ async function executeBegunRun(
       dependencies,
       emailSelections,
       deliveredPurchaseIds,
+      alertCandidates,
+      reportRows,
+      startedAt,
     );
-    const warehouseUnresolvedPrices = warehouseUnresolvedPriceCount(
-      requests,
-      priceEvidence,
-    );
-    const onlineUnresolvedPrices = onlineUnresolvedPriceCount(
-      requests,
-      priceEvidence,
-    );
-    const unresolvedPrices = warehouseUnresolvedPrices + onlineUnresolvedPrices;
     const hasBatchFailure =
       observations.some(
         (observation) => observation.unresolvedReason === 'batch_failed',
@@ -1090,18 +1089,29 @@ async function deliverEmail(
   dependencies: LockedRunDependencies,
   selections: readonly AlertSelection[],
   deliveredPurchaseIds: Set<string>,
+  candidates: readonly AdjustmentCandidate[],
+  rows: FullRunReport['rows'],
+  startedAt: string,
 ): Promise<NotificationChannelResult> {
-  if (selections.length === 0) return notAttempted();
+  if (selections.length === 0 && !dependencies.config.emailEveryRun) {
+    return notAttempted();
+  }
   try {
     const recipient =
       dependencies.config.emailRecipient ??
       (await dependencies.mailNotifier.resolveSelfRecipient());
+    const weeklyReport = dependencies.config.emailEveryRun
+      ? { candidates, rows, startedAt }
+      : null;
     await dependencies.mailNotifier.send(
       recipient,
-      ALERT_TITLE,
-      renderTextReport({
-        candidates: selections.map((selection) => selection.candidate),
-      }),
+      weeklyReport === null ? ALERT_TITLE : 'Costco weekly price report',
+      weeklyReport === null
+        ? renderTextReport({
+            candidates: selections.map((selection) => selection.candidate),
+          })
+        : renderWeeklyReportEmail(weeklyReport),
+      weeklyReport === null ? undefined : renderWeeklyReportHtml(weeklyReport),
     );
   } catch (error) {
     return { attempted: true, delivered: 0, error: errorMessage(error) };

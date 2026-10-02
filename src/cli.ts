@@ -30,7 +30,7 @@ Commands:
   login             Open the dedicated Chrome profile for manual Costco login
   run [--scheduled] Import receipts, check prices, and deliver new alerts
   status            Show data paths and the latest successful run
-  install-agent     Install and load the daily macOS LaunchAgent
+  install-agent     Install and load the configured macOS LaunchAgent
   uninstall-agent   Unload and remove the macOS LaunchAgent
   doctor            Check offline runtime, storage, Mail presence, and browser-profile readiness
   help               Show this help

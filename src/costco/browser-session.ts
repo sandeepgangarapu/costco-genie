@@ -4,12 +4,12 @@ import { createServer } from 'node:net';
 import { chromium } from 'playwright';
 
 import type { AppPaths } from '../config/paths.js';
+import { chromeBinaryPath } from './chrome-path.js';
 import { AuthRequiredError } from './errors.js';
 
 const LOGIN_URL = 'https://www.costco.com/AccountHomeView';
 const ORDERS_URL = 'https://www.costco.com/myaccount/orders';
-const CHROME_BINARY =
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME_BINARY = chromeBinaryPath();
 const CDP_CONNECT_TIMEOUT_MILLISECONDS = 20_000;
 const ORDER_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
 
