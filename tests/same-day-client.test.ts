@@ -9,7 +9,7 @@ import {
 } from '../src/costco/same-day-client.js';
 
 const observedAt = '2026-08-21T18:00:00.000Z';
-const deliveryAddress = '2520 NE Park Dr, Issaquah, WA 98029';
+const deliveryAddress = '123 Example St, Sample City, NY 10001';
 
 interface FakeLocation {
   readonly deliveryLabel?: string;
@@ -37,10 +37,9 @@ function pageWithSearches(
 ): SameDayPage {
   let searchIndex = -1;
   const suggestions = location.suggestions ?? [
-    '2520 Northeast Park Drive\nIssaquah, WA 98029',
+    '123 Example Street\nSample City, NY 10001',
   ];
-  const deliveryLabel =
-    location.deliveryLabel ?? 'Delivery 2520 Northeast Park Drive';
+  const deliveryLabel = location.deliveryLabel ?? 'Delivery 123 Example Street';
 
   return {
     async close() {
@@ -466,7 +465,7 @@ describe('fetchSameDayPrices', () => {
         launchBrowser: async () => browser,
         now: () => new Date(observedAt),
         nowMilliseconds: () => 1_000,
-        postalCode: '98029',
+        postalCode: '10001',
         timeout: 4_321,
       },
     );
@@ -477,7 +476,7 @@ describe('fetchSameDayPrices', () => {
         itemNumber: '1753490',
         observedAt,
         promotionText: null,
-        source: 'same_day_guest_storefront_zip_98029',
+        source: 'same_day_guest_storefront_zip_10001',
         unavailableReason: null,
         unitPriceCents: 1531,
         warehouseNumber: '129',
@@ -511,7 +510,7 @@ describe('fetchSameDayPrices', () => {
     const browser = browserWithPages(
       [
         pageWithSearches(['Item: 1753490\nCurrent price: $15.31'], events, {
-          suggestions: ['2520 Northeast Park Drive Issaquah, WA 98028'],
+          suggestions: ['123 Example Street Sample City, NY 10002'],
         }),
       ],
       events,
@@ -523,7 +522,7 @@ describe('fetchSameDayPrices', () => {
         deliveryAddress,
         launchBrowser: async () => browser,
         now: () => new Date(observedAt),
-        postalCode: '98029',
+        postalCode: '10001',
       },
     );
 

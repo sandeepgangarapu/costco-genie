@@ -10,3 +10,75 @@ logs/
 browser-profile/
 .costco-price-matcher/
 .worktrees/
+
+# Local configuration and credentials (the real config belongs in your home directory).
+/config.json
+config.local.*
+smtp*.json
+*.local.json
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+secrets*.json
+
+# Browser sessions, caches, request captures, and downloads.
+browser-data/
+browser-cache/
+chrome-profile/
+chrome-user-data/
+user-data/
+user-data-dir/
+.cache/
+.auth/
+playwright/.auth/
+storage-state*.json
+storageState*.json
+auth-state*.json
+session*.json
+tokens*.json
+cookies*.json
+Cookies
+Cookies-journal
+Login Data
+Login Data-journal
+Local State
+Cache/
+Code Cache/
+GPUCache/
+Local Storage/
+Session Storage/
+*.har
+*.zip
+*.tgz
+*.tar
+*.tar.gz
+traces/
+downloads/
+
+# Private purchases and generated output.
+data/
+receipts/
+orders/
+reports/
+screenshots/
+test-results/
+playwright-report/
+coverage/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite-journal
+*.sqlite3-journal
+
+# macOS metadata and editor files.
+.DS_Store
+._*
+.idea/
+.vscode/

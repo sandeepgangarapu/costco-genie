@@ -16,9 +16,9 @@ import {
   type RunLock,
 } from '../app/run.js';
 import {
-  DEFAULT_CONFIG,
   loadConfig,
   readConfigWithoutMutation,
+  saveConfig,
   type AppConfig,
 } from '../config/config.js';
 import { appPaths, type AppPaths } from '../config/paths.js';
@@ -33,10 +33,7 @@ import {
 import { fetchOnlineOrderPurchases } from '../costco/online-order-client.js';
 import { fetchReceipts } from '../costco/receipt-client.js';
 import type { RunSummary } from '../domain/types.js';
-import {
-  createPrivateTextFile,
-  pathExistsWithoutFollowing,
-} from '../lib/filesystem.js';
+import { pathExistsWithoutFollowing } from '../lib/filesystem.js';
 import { FileRunLock } from '../lib/process.js';
 import { AppleMailNotifier } from '../notifications/apple-mail.js';
 import { SmtpMailNotifier } from '../notifications/smtp-mail.js';
@@ -50,6 +47,7 @@ import {
 } from '../scheduler/launchd.js';
 import { Database } from '../storage/database.js';
 import { diagnoseEnvironment, type DoctorReport } from './doctor.js';
+import { promptForSetup, type SetupOptions } from './setup.js';
 
 const AGENT_LABEL = 'com.costco-price-matcher.daily';
 
@@ -60,7 +58,7 @@ export interface CliActions {
   readonly run: (options: {
     readonly scheduled: boolean;
   }) => Promise<RunSummary>;
-  readonly setup: () => Promise<string>;
+  readonly setup: (options?: SetupOptions) => Promise<string>;
   readonly status: () => Promise<string>;
   readonly uninstallAgent: () => Promise<string>;
 }
@@ -71,6 +69,7 @@ export interface DefaultCliActionOptions {
 }
 
 export interface DefaultCliDependencies {
+  readonly promptSetup: (config: AppConfig) => Promise<SetupOptions>;
   readonly accessPath: (path: string, mode: number) => void;
   readonly compiledCliPath: string;
   readonly createLocalNotifier: () => LocalNotifier;
@@ -167,14 +166,10 @@ export function createDefaultCliActions(
         }
       });
     },
-    setup: async () => {
-      loadConfig(paths);
-      if (!existsSync(paths.configFile)) {
-        createPrivateTextFile(
-          paths.configFile,
-          `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`,
-        );
-      }
+    setup: async (options) => {
+      const config = loadConfig(paths);
+      const changes = options ?? (await dependencies.promptSetup(config));
+      saveConfig(paths, { ...config, ...changes });
       const database = dependencies.openDatabase(paths.databaseFile);
       database.close();
       return paths.configFile;
@@ -327,6 +322,7 @@ async function runDoctor(
 
 function defaultCliDependencies(): DefaultCliDependencies {
   return {
+    promptSetup: promptForSetup,
     accessPath: accessSync,
     compiledCliPath: compiledCliPath(),
     createLocalNotifier: () => new MacOsNotifier(),

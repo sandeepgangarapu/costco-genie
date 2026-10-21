@@ -1,227 +1,248 @@
 # Costco Price Matcher
 
-## What is this?
+Find potential price drops on your recent Costco purchases, using your own Costco account on your Mac.
 
-Costco has price-adjustment policies for eligible purchases. If an item you bought goes on sale soon after your purchase, you may be able to request the difference—but only if you notice and ask.
+The app imports warehouse receipts and Costco.com orders, checks available current prices, and writes a report you can open in your browser. It can send macOS notifications and email, and optionally run every morning. You review any potential savings and request an adjustment yourself.
 
-Costco Price Matcher is a free, personal tool that does that noticing for you. It runs entirely on your own Mac:
+**You need a Mac and a signed-in Costco session in the app's dedicated Google Chrome window.** Signing in to Costco in your everyday browser is not enough. You sign in yourself; there is no Costco password or API key to put in a configuration file.
 
-1. It imports recent warehouse receipts and Costco.com orders from your own logged-in Costco session.
-2. It compares warehouse purchases only with a verified current price at the same warehouse, and Costco.com purchases only with an exact current Costco.com price.
-3. When a supported comparison is lower, it sends you a macOS notification and a plain-text email listing the potential savings.
-4. You review the evidence and contact the appropriate Costco channel if you decide to request an adjustment.
+## What you'll need
 
-It repeats this automatically every morning (or on any interval you choose). Identical price-and-urgency alerts are suppressed, while a same-price reminder may recur when the days remaining enter a more urgent bucket.
+- **macOS**, with a desktop session. Windows, Linux, and unattended servers are not supported.
+- **Your own Costco account**, with access to your receipts or orders.
+- **[Google Chrome](https://www.google.com/chrome/)**, installed in Applications or your home Applications folder.
+- **[Node.js](https://nodejs.org/en/download) 22.13.0 or newer**, including npm. An existing NVM installation also works; the launcher selects the version in `.nvmrc`.
+- **Apple Command Line Tools**, for Git and native dependencies. To install, run `xcode-select --install` in Terminal and finish Apple's installer.
+- **Apple Mail with an enabled email account**, for default email delivery. You can use your own SMTP account instead; see [email settings](#email-settings).
 
-**Important:** this project is unofficial and is not affiliated with, endorsed by, or supported by Costco. It uses undocumented Costco APIs that can change or stop working without notice. Automated access may be restricted by Costco's terms or account policies; review the applicable terms and use the tool conservatively at your own risk. The tool reports potential savings only: it does not submit a price-adjustment request or guarantee Costco eligibility. Always verify the item, current price, purchase date, active quantity, and applicable policy before acting.
+## Set up from one URL
 
----
+Open **Terminal** (Applications → Utilities → Terminal), paste this command, and press Enter:
 
-## First-time setup (do these once, then forget about it)
+```sh
+curl -fsSL https://raw.githubusercontent.com/sandeepgangarapu/costco-price-matcher/main/install.sh | sh
+```
 
-**What you need:**
+You can [read the installer](https://github.com/sandeepgangarapu/costco-price-matcher/blob/main/install.sh) first. It checks prerequisites, downloads this repository into `~/costco-price-matcher`, installs the project's dependencies, builds the app, and creates your private local configuration. It stops with instructions if a prerequisite is missing. It does not install Chrome or Node for you.
 
-- A Mac running macOS, with **Apple Mail** set up and at least one enabled account, or an existing SMTP configuration file
-- **NVM** (recommended), or **Node.js 22.13.0 or newer** with npm
-- **Google Chrome** in `/Applications` or `~/Applications` (used for Costco sign-in and Same-Day guest price estimates; your password is never seen or stored by the tool)
-- **Xcode Command Line Tools**, if `npm` needs to compile native modules (`xcode-select --install`)
+The setup wizard asks for optional settings:
 
-The checked-in `./costco` launcher is the only command entry point you need. When NVM is installed, it installs and selects the Node version pinned in `.nvmrc`. It also refreshes native dependencies when the Node ABI or lockfile changes, builds the CLI, and then runs the requested command. This prevents a dependency compiled by one Node version from being loaded by another.
+- **ZIP and nearby address:** only needed for Costco Same-Day estimates. Use an address in the ZIP where you want prices checked. Leave the ZIP blank to skip estimates. If you supply a ZIP, also supply an address. The location is sent to Costco Same-Day to localize pricing.
+- **Email recipient:** leave blank to send alerts to the first address on an enabled Apple Mail account, or enter your preferred recipient.
 
-These are the **one-time** things you have to do yourself. After this, everything runs on its own.
+Press Enter to keep the displayed value. Enter `-` to clear a value. No location is built in. Your choices stay in `~/.costco-price-matcher/config.json`, outside the repository. Email is sent only when you later run a live check.
 
-1. **Set up the tool** — from the project checkout, run one command:
+> Already downloaded or cloned this repo? Open its folder in Terminal and run `./costco setup` instead. The launcher takes care of dependencies and building. Rerunning setup preserves existing settings unless you change them.
 
-   ```sh
-   ./costco setup
-   ```
+### 1. Sign in to Costco
 
-2. **Sign in to Costco once** — run:
+```sh
+cd ~/costco-price-matcher
+./costco login
+```
 
-   ```sh
-   ./costco login
-   ```
+A **separate Google Chrome window** opens. Sign in to Costco yourself and complete any MFA or CAPTCHA. Wait until you are signed in, then **close the dedicated Costco Chrome window** so the command can finish. You can keep your everyday Chrome windows open.
 
-   A dedicated Chrome window opens. Sign in manually—including any MFA or CAPTCHA—then close that window. This is the only time your Costco account is involved interactively. The tool never sees or stores your password; the session lives in that Chrome profile.
+The app keeps this session in `~/.costco-price-matcher/browser-profile/` and reuses it for live checks. It does not ask for your password in Terminal. Treat this profile like any signed-in browser: do not share it or copy it into Git.
 
-3. **Allow Mail automation** — the first time an alert is delivered, macOS may ask whether the terminal can control Apple Mail. Click **Allow**. (If you miss the prompt, grant it later under **System Settings → Privacy & Security → Automation**.)
+**Each person must complete this step on their own Mac.** A session in another Chrome profile, an agent's browser, or a browser preview cannot replace the app's profile. When Costco expires the session, repeat `./costco login`.
 
-4. **Turn on automatic runs** — run:
-
-   ```sh
-   ./costco install-agent
-   ```
-
-5. **Check everything is ready** (optional but recommended):
-
-   ```sh
-   ./costco doctor
-   ```
-
-> **What happens after setup — no action needed from you:**
->
-> - Every day at 09:00 (your Mac's local time), the tool checks recent warehouse receipts and Costco.com orders against channel-correct current prices by itself.
-> - It also runs whenever you log in to or wake your Mac—but only if the last successful check was more than 20 hours ago, so unlocking your Mac does not cause duplicate checks.
-> - When it finds something you bought that is now cheaper, you get a **macOS notification** and a **plain-text email** with the item, prices, and potential savings.
-> - Identical price-and-urgency alerts are suppressed; a same-price reminder may recur when the days remaining enter a more urgent bucket.
-> - If your Costco sign-in ever expires, you get one notification telling you to run `./costco login` again. That is the only maintenance you may ever need to redo.
-> - Nothing else touches Costco: `./costco status` and `./costco doctor` are offline, and all your data stays in `~/.costco-price-matcher/`.
-
-### Run your first check right now (optional)
-
-You don't have to wait until tomorrow's scheduled run:
+### 2. Run your first check
 
 ```sh
 ./costco run
 ```
 
-This contacts Costco, imports up to 35 days of warehouse receipts and Costco.com orders, checks current prices, and may send notifications and email right away.
+Keep the dedicated login window closed during checks. A check contacts Costco, imports recent purchases, and may send notifications and email. The first delivery through Apple Mail may show a macOS permission prompt; choose **Allow**. If needed, check **System Settings → Privacy & Security → Automation**.
 
----
-
-## Details
-
-### Configuration (optional)
-
-You do not need to configure anything to start. If you want to change behavior, edit:
-
-```text
-~/.costco-price-matcher/config.json
-```
-
-Defaults:
-
-| Setting                        | Default                                 | Meaning                                                                                |
-| ------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------- |
-| `daysToFetch`                  | `35`                                    | How many days of warehouse receipts and Costco.com orders to import                    |
-| `adjustmentWindowDays`         | `30`                                    | Purchases within this many calendar days are adjustment candidates                     |
-| `scheduledHour`                | `9`                                     | Hour of day for scheduled runs (local time)                                            |
-| `scheduledMinute`              | `0`                                     | Minute of day for scheduled runs                                                       |
-| `scheduledWeekday`             | `null`                                  | Optional weekday (`0` Sunday through `6` Saturday); `5` runs on Fridays                |
-| `scheduledIntervalDays`        | `1`                                     | Minimum days between scheduled runs (e.g., `3` = roughly every 3 days)                 |
-| `emailRecipient`               | `null`                                  | Where alert emails go; defaults to the first address on an enabled Apple Mail account  |
-| `emailEveryRun`                | `false`                                 | Send a summary with only potential savings after every completed check                 |
-| `smtpConfigPath`               | `null`                                  | Absolute path to a private SMTP JSON config; when set, email uses SMTP instead of Mail |
-| `priceBatchSize`               | `25`                                    | Item numbers checked per sequential price batch (max 25)                               |
-| `minimumSavingsCents`          | `1`                                     | Smallest total purchase-line savings worth alerting about                              |
-| `sameDayMarkupPercent`         | `13.5`                                  | Markup applied to warehouse prices for Same-Day estimates                              |
-| `sameDayPostalCode`            | `'98029'`                               | Postal code used for Same-Day price estimates                                          |
-| `sameDayRepresentativeAddress` | `'2520 NE Park Dr, Issaquah, WA 98029'` | Representative warehouse address for Same-Day estimates                                |
-
-The configuration contains non-secret settings only. After changing scheduling-related values (`scheduledHour`, `scheduledMinute`, `scheduledIntervalDays`), run `./costco install-agent` again.
-
-### Run manually
+Open your report:
 
 ```sh
-./costco run     # live receipt and price check; may send alerts
-./costco status  # local paths and last successful run; contacts nothing
+open ~/.costco-price-matcher/reports/latest.html
 ```
 
-Warehouse-receipt requests and each sequential price batch have a conservative 30-second deadline, and noninteractive helper commands use the same bound. Manual `./costco login` browser interaction is intentionally not given this short deadline.
+You'll see purchase lines, available current prices, potential savings, and reasons a price could not be found. CSV and JSON copies are in the same folder. Missing prices are normal for some products; they are not treated as price drops.
 
-Useful run exit codes are:
+### 3. Optional: check automatically
 
-- `0`: success, or a fresh scheduled run was skipped
-- `1`: failed
-- `2`: partial failure, such as an unresolved price batch or notification-channel error
-- `3`: Costco authentication required; run `./costco login`
-
-For command help:
+After your first check works:
 
 ```sh
-./costco --help
+./costco install-agent
 ```
 
-### Full reports
+By default, this checks daily at **09:00 in your Mac's local time**, with a login trigger and a freshness check to avoid repeating a recent successful run. The Mac needs to be running with your user session available and internet access; it is not a hosted service.
 
-Every completed check writes owner-only JSON, CSV, and self-contained HTML reports under `~/.costco-price-matcher/reports/`. A scheduled run skipped because of a recent successful check leaves the latest report intact. Timestamped files preserve individual runs; `latest.json`, `latest.csv`, `latest.html`, and `latest-manifest.json` identify the latest complete report set. Latest-file replacement is atomic, and partial delivery is cleaned up rather than advertised as a complete snapshot.
-
-The detailed purchase-line fields include purchase channel, receipt or order identifier, item number and description, purchase date, active quantity, paid unit price, comparison channel and price, unit delta, total potential savings, days remaining, status, reason, and each evidence channel. JSON uses schema version `2`. CSV and JSON use stable channel values such as `warehouse`, `costco_com`, and `same_day`; HTML uses friendly labels such as “Warehouse,” “Costco.com,” and “Same-Day estimate.” The report summary separates warehouse and Costco.com line coverage and includes source diagnostics, including `costco_online_orders`.
-
-A valid current comparison is shown even when it is not lower or its savings fall below the alert threshold. Potential savings are never negative: they are the positive unit delta multiplied by active quantity, or zero when the current price is not lower. When the relevant current price is unavailable or invalid, comparison price, delta, and potential savings are unavailable rather than borrowed from another channel.
-
-To run the unauthenticated, read-only public coverage sample directly from the checkout:
-
-```sh
-npm run probe:live-price
-```
-
-The probe reports the sample as resolved or unresolved; it does not claim general warehouse-price coverage.
-
-### Scheduler
-
-Run `./costco install-agent`. The launcher selects the pinned supported Node runtime and builds the project before the agent is installed.
-
-The generated user LaunchAgent runs at login and daily at 09:00 by default. Its scheduled invocation uses a freshness check of four hours less than `scheduledIntervalDays` days (20 hours by default), so waking or logging in does not duplicate a recent successful run. With `scheduledIntervalDays` set to 3, a successful run suppresses the next two daily triggers and the next run happens on the third day at 09:00. When `scheduledWeekday` is set, the agent runs only on that weekday at the configured time and does not run at login. The same freshness check prevents a weekly run from repeating a recent manual check.
-
-The installer pins absolute paths to the current Node executable, compiled CLI, checkout, and logs. It rejects a missing/non-executable Node target, Node older than 22.13.0, or a missing compiled CLI. **Run `./costco install-agent` again after moving the checkout or changing, upgrading, or removing the pinned Node installation.**
-
-The installer writes and validates:
-
-```text
-~/Library/LaunchAgents/com.costco-price-matcher.daily.plist
-```
-
-Replacement is transactional: the installer writes a same-directory temporary plist, validates it with `plutil`, and detects whether the prior label is loaded. Before unloading a loaded service it requires and validates the old plist, then creates and verifies a backup. A missing or invalid old plist aborts replacement without unloading the service. The candidate is atomically renamed into place only after those checks.
-
-If a later step fails, the installer restores the old plist atomically and reloads it only when it was previously loaded. If restoration itself fails, it leaves the service unloaded, does not load from the replacement path, and reports the preserved backup's recovery path. If booting out the replacement during rollback fails, the loaded state is uncertain: the installer stops immediately, does not claim restoration, and does not restore or re-bootstrap either plist. It normally preserves and reports a recovery-copy path; if that copy also fails during a first install, it instead reports the in-place replacement as the recovery artifact. Either case requires manual recovery after inspecting the loaded service. Temporary and backup files are cleaned after a successful install or successful rollback. The installer loads only in the current user's `gui/<uid>` launchd domain and does not require or use `sudo`.
-
-To unload the agent and remove its plist:
+To stop automatic checks:
 
 ```sh
 ./costco uninstall-agent
 ```
 
-Uninstall boots out `gui/<uid>/com.costco-price-matcher.daily` by label, so it can still unload the service when the plist is missing or corrupt. It then removes the plist if present. It does not delete receipts, observations, configuration, logs, or the dedicated browser profile.
+This keeps your configuration, session, and reports. To confirm paths and check local readiness:
 
-### Apple Mail permission and delivery
-
-Alerts use the first address on an enabled Apple Mail account unless `emailRecipient` is set in the configuration. Mail content is deliberately plain text: Apple Mail's supported scripting property does not reliably turn an assigned string into HTML.
-
-To reuse an existing SMTP account, set `smtpConfigPath` to an absolute path to an owner-only JSON file containing `smtp_host`, `smtp_port`, `smtp_user`, `smtp_pass`, `email_from`, and `email_to`. The sender requires TLS on port 587 and uses implicit TLS on port 465. `emailRecipient` can override `email_to`. The SMTP password stays in that private file and is never copied into the LaunchAgent plist or repository. Set `emailEveryRun` to `true` to receive a summary after every completed check, including when no price drop is found. SMTP sends an HTML adjustment table with a plain-text table fallback. It uses Pacific time and shows the item name and number, original warehouse, paid and current unit prices, total potential savings, purchase date, days left, and price source. The email ends with totals for items considered, prices found, and potential adjustments, followed by the names of items with no current price. The full purchase-line report remains in the local HTML, CSV, and JSON files.
-
-On the first attempted delivery, macOS may ask whether the Node or terminal process can automate Mail. Allow it under **System Settings → Privacy & Security → Automation**. If the prompt appeared during a manual run but scheduled delivery still fails, inspect the logs and verify the relevant process has Mail permission. The tool never sends mail during `setup`, `status`, or `doctor`.
-
-### Local data and security model
-
-All state stays on this Mac under:
-
-```text
-~/.costco-price-matcher/config.json
-~/.costco-price-matcher/costco.sqlite
-~/.costco-price-matcher/browser-profile/
-~/.costco-price-matcher/logs/stdout.log
-~/.costco-price-matcher/logs/stderr.log
-~/.costco-price-matcher/run.lock
-~/.costco-price-matcher/reports/
+```sh
+./costco status
+./costco doctor
 ```
 
-The application root, browser profile, and log directories are created and hardened to mode `0700`; configuration, database, and lock files are mode `0600`. Mutating commands reject symbolic-link and wrong-type targets at these boundaries. Existing owned paths are hardened when a mutating command opens them, while read-only `status` and `doctor` checks do not change permissions. SQLite uses its non-WAL default so no persistent `-wal` or `-shm` state is expected.
+These commands are offline. **Doctor checks that the browser profile exists; only a live check verifies that you are still signed in.**
 
-Costco session data remains in the dedicated Chrome profile, which should be protected like a logged-in browser. SQLite stores normalized warehouse and Costco.com purchase lines, relevant product observations, alert state, sanitized failure diagnostics, and run summaries. Raw receipt or order responses, addresses, payment details, member data, and other order PII are never stored in SQLite, logs, or reports. The normalized receipt/order identifiers and product fields needed for matching do appear in owner-only local state and reports. Apple Mail supplies the sender identity at runtime.
+## Change your settings
 
-### Coverage limits
+Run the wizard any time:
 
-Matching is intentionally strict and channel-separated. Warehouse purchases require the exact Costco item number, original warehouse number, a positive verified current warehouse price, and the `WH` program marker. Costco.com purchases require the exact item number and usable exact current Costco.com evidence. Costco.com evidence is never used to compare a warehouse purchase, warehouse evidence is never used to compare an online purchase, and Same-Day estimates apply only to warehouse purchases when verified warehouse pricing is unavailable. Receipt discounts are associated only when their referenced item number exactly matches a warehouse purchase line; unresolved discount lines are skipped instead of being guessed from adjacency. Fuzzy or AI matching is not used.
+```sh
+./costco setup
+```
 
-Costco.com imports include merchandise lines only after fulfillment evidence (shipped, delivered, pickup completed, or a fulfilled line status). Their active quantity is the ordered quantity minus cancelled units and the greater returned count, clamped between zero and the ordered quantity; zero-active, fee, wholly cancelled, wholly returned, malformed, or unfulfilled lines are excluded.
+For a coding agent or a noninteractive terminal, pass your own values explicitly. Replace the placeholders before running:
 
-The product services do not expose a usable price for every item. Missing, wrong-channel, zero-price, malformed, and failed results are counted as unresolved and never become an alert. A warehouse purchase with no verified warehouse price can produce a separately labeled Same-Day estimated opportunity, but it requires manual warehouse verification. Both adjustment windows use the Mac's current local calendar date and the leading `YYYY-MM-DD` on the source purchase; a `Z` or numeric offset never shifts that printed purchase into another day.
+```sh
+./costco setup --zip YOUR_ZIP --address "YOUR_NEARBY_ADDRESS" --email you@example.com
+```
 
-Warehouse receipt import and Costco.com order import fail independently. If one source fails, the run continues with current data from the other source, writes the available rows and sanitized source diagnostics, and reports `partial_failure`; one failed source does not suppress the other. A failed detail or price batch is similarly isolated where possible.
+Or skip Same-Day estimates:
 
-All reported savings are potential. The tool can alert on exact lower warehouse prices, exact lower Costco.com prices, and separately labeled Same-Day warehouse estimates. It does not submit any request, determine every policy exception, or guarantee that Costco will approve an adjustment.
+```sh
+./costco setup --no-same-day
+```
 
-### Troubleshooting
+`--email -` resets the email recipient to the mail provider's default. Supplied options change only those settings; other existing choices stay in place. With no options and no interactive terminal, setup creates defaults or preserves the existing configuration without asking questions. The installer skips estimates when it cannot open an interactive terminal.
 
-- **`./costco login` recovery appears:** run `./costco login`, complete sign-in manually, close the dedicated window, and retry `./costco run`. Doctor can confirm that the profile directory exists, but intentionally does not contact Costco to validate the live session. The tool does not bypass MFA or CAPTCHA.
-- **Chrome profile is already in use:** close the dedicated Costco Chrome window before running a live check. Doctor only checks whether the profile directory exists and does not launch Chrome.
-- **The launcher rejects Node:** install NVM, or install Node 22.13.0 or newer with npm, then rerun the same `./costco` command.
-- **Checkout or Node moved after installation:** run `./costco install-agent` again so launchd receives the new absolute paths.
-- **Plist is missing or corrupt during uninstall:** `./costco uninstall-agent` unloads the known service label directly and does not depend on parsing the plist.
-- **Mail account is not visible:** open Mail, finish account setup, confirm the account is enabled, and review Automation permission in System Settings.
-- **Scheduled run has no output:** inspect `~/.costco-price-matcher/logs/stdout.log` and `stderr.log`, then run `./costco status` and `./costco doctor` interactively.
-- **Many unresolved items:** this can be a normal provider coverage limitation. It may also indicate that Costco changed its unofficial API; unresolved results are intentionally not treated as price drops.
-- **Native module installation fails:** install or update Xcode Command Line Tools, then rerun the same `./costco` command. The launcher will retry the dependency refresh.
-- **Another run holds the lock:** wait for it to finish. If no process is running, the stable lock file may remain; that is harmless because only the kernel-held lock denotes ownership.
-- **Configuration is invalid:** correct `~/.costco-price-matcher/config.json` using the documented ranges, or move it aside and rerun `./costco setup`.
+For scheduling and advanced settings, open your local configuration:
+
+```sh
+open -e ~/.costco-price-matcher/config.json
+```
+
+This is JSON: use double quotes, keep commas between entries, and write `null` without quotes. **Do not put your settings in source code.** The app reads this file on each command; `.env` files are not loaded. Local configuration also works for scheduled runs without relying on your Terminal's environment variables.
+
+<details>
+<summary>All settings and defaults</summary>
+
+| Setting                        | Default | What it does                                                                                                                                     |
+| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `daysToFetch`                  | `35`    | Days of receipts/orders to import; 1–365.                                                                                                        |
+| `adjustmentWindowDays`         | `30`    | Purchase-age window to consider; 1–365. This does not establish Costco eligibility.                                                              |
+| `sameDayPostalCode`            | `null`  | Your five-digit ZIP, as a string. Optional.                                                                                                      |
+| `sameDayRepresentativeAddress` | `null`  | Nearby address in that ZIP. Both location fields are needed for Same-Day estimates.                                                              |
+| `sameDayMarkupPercent`         | `13.5`  | Assumed markup used to estimate warehouse prices from Same-Day prices; greater than 0 and less than 100. It is an estimate, not a verified rate. |
+| `emailRecipient`               | `null`  | Alert recipient; null uses the email provider's default.                                                                                         |
+| `emailEveryRun`                | `false` | Email a summary after each completed check, including when there are no potential savings.                                                       |
+| `smtpConfigPath`               | `null`  | Absolute path to your private SMTP JSON file; null uses Apple Mail.                                                                              |
+| `scheduledHour`                | `9`     | Scheduled local hour; 0–23.                                                                                                                      |
+| `scheduledMinute`              | `0`     | Scheduled minute; 0–59.                                                                                                                          |
+| `scheduledWeekday`             | `null`  | Null for daily; 0 for Sunday through 6 for Saturday for weekly.                                                                                  |
+| `scheduledIntervalDays`        | `1`     | Freshness interval between successful scheduled checks; 1–365. Daily triggers skip recent successful checks.                                     |
+| `priceBatchSize`               | `25`    | Number of items per sequential price batch; 1–25.                                                                                                |
+| `minimumSavingsCents`          | `1`     | Minimum total savings per purchase line for an alert; a nonnegative integer.                                                                     |
+
+After changing the schedule, run `./costco install-agent` again. Also reinstall it after moving the checkout or changing/removing the Node installation: the agent records absolute paths.
+
+</details>
+
+### Email settings
+
+**Apple Mail (default):** open Mail, finish adding an account, and make sure it is enabled. Leave `emailRecipient` null to send to yourself or set it through the wizard. Apple Mail messages are plain text.
+
+**SMTP (optional):** keep credentials outside the repository. Create a private file:
+
+```sh
+mkdir -p ~/.costco-price-matcher
+(umask 077; touch ~/.costco-price-matcher/smtp.json)
+chmod 600 ~/.costco-price-matcher/smtp.json
+open -e ~/.costco-price-matcher/smtp.json
+```
+
+Fill it with your provider's settings; these are placeholders:
+
+```json
+{
+  "smtp_host": "smtp.example.com",
+  "smtp_port": 587,
+  "smtp_user": "you@example.com",
+  "smtp_pass": "REPLACE_WITH_YOUR_PROVIDER_PASSWORD",
+  "email_from": "you@example.com",
+  "email_to": "you@example.com"
+}
+```
+
+In your local `config.json`, set `smtpConfigPath` to the **full absolute path** of that file. Run `echo "$HOME/.costco-price-matcher/smtp.json"` to see the path; `~` is not expanded inside JSON. Use your provider's app password if required. Port 465 uses implicit TLS; other ports require STARTTLS. SMTP messages include an HTML table and plain-text fallback. `emailRecipient`, if set, overrides `email_to`.
+
+Never paste this file, your password, or your browser session into an issue or a chat.
+
+## What the results mean
+
+- **Warehouse purchases** are compared with verified current prices for the original warehouse and exact item number.
+- **Costco.com purchases** are compared with exact Costco.com prices. Online and warehouse comparisons stay separate.
+- **Same-Day estimates** are optional, clearly labeled estimates used when verified warehouse pricing is unavailable. They need manual verification at the warehouse.
+- **Unresolved** means the app could not obtain a usable price. Costco's services do not expose every price, and their undocumented interfaces can change.
+
+The app does not submit adjustment requests. Verify the item, price, date, quantity, and applicable Costco policy before requesting an adjustment. Identical alerts are suppressed; further price drops or approaching deadlines may produce another alert.
+
+This is an unofficial personal tool, unaffiliated with Costco. Receipt and price coverage can change or stop working.
+
+## Your data and sharing this repo
+
+The app uses this private folder in your home directory:
+
+```text
+~/.costco-price-matcher/
+  config.json       Your settings
+  browser-profile/  Your signed-in Chrome session, cookies, and browser state
+  costco.sqlite     Purchase lines, price observations, alert state, and run history
+  reports/          HTML, CSV, and JSON reports (including purchase identifiers)
+  logs/             Scheduled-run output
+  smtp.json         Optional credentials, if you create this file
+```
+
+The app creates private directories and owner-only configuration/database/report files. Browser session data is sensitive even without a password file. The app extracts session tokens in memory for Costco requests. It stores normalized purchase fields rather than raw receipt/order responses. Costco requests go to Costco's services; optional emails go through Apple Mail or your chosen SMTP provider.
+
+**Share the Git repository link.** Everyone installs their own copy, chooses their own settings, and signs into their own Costco account. Browser profiles, cookies, caches, local configuration, credentials, databases, reports, and logs are excluded by `.gitignore`. Avoid sending a zip of your working folder: ignored local files could be included.
+
+Current-file cleanup does not erase earlier Git commits. The published repository's history and commit metadata remain visible.
+
+## Troubleshooting
+
+| What you see                                | What to do                                                                                                                                                                                                                                                                          |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Missing Node/npm or unsupported Node        | Install Node 22.13.0+ with npm, reopen Terminal, and retry. If you use NVM, the launcher loads it from `NVM_DIR` or `~/.nvm`.                                                                                                                                                       |
+| Git or a native dependency fails to install | Run `xcode-select --install`, finish Apple's installer, and retry.                                                                                                                                                                                                                  |
+| Installer says the destination exists       | Continue from that checkout with `./costco setup`. It will not overwrite an existing folder. For a new location, use `curl -fsSL https://raw.githubusercontent.com/sandeepgangarapu/costco-price-matcher/main/install.sh \| COSTCO_INSTALL_DIR="$HOME/another-costco-checkout" sh`. |
+| Authentication required                     | Run `./costco login`, complete sign-in, close the dedicated window, and retry `./costco run`.                                                                                                                                                                                       |
+| Chrome profile is already in use            | Close the app's dedicated Costco Chrome window before running a check.                                                                                                                                                                                                              |
+| No receipts or orders                       | Confirm the account has purchase history visible in Costco's account pages using the dedicated login window. Then close it and retry.                                                                                                                                               |
+| Many unresolved prices                      | Open the report's source diagnostics. Some items have no usable price; Costco may also have changed an interface.                                                                                                                                                                   |
+| Same-Day estimates unavailable              | Supply both your ZIP and a nearby address using `./costco setup`, or leave estimates disabled.                                                                                                                                                                                      |
+| Email fails                                 | Check your enabled Apple Mail account and Automation permission, or your private SMTP file. `./costco doctor` does not test actual delivery.                                                                                                                                        |
+| Automatic checks stop                       | Run `./costco status` and `./costco doctor`; inspect the private logs under `~/.costco-price-matcher/logs/`. Reinstall the agent if the checkout, Node, or schedule changed.                                                                                                        |
+| Invalid configuration                       | Correct the local JSON file. Setup validates input before saving it.                                                                                                                                                                                                                |
+
+A run exits with `0` for success or a skipped fresh scheduled run, `1` for failure, `2` for partial failure, and `3` when sign-in is required. Even with a partial failure, the report may contain useful results from working sources.
+
+## Setting up with a coding agent
+
+Give the agent this repository URL and ask it to follow [AGENTS.md](AGENTS.md). It can install dependencies, create your local configuration, and run offline checks. **You still sign in to Costco in the dedicated Chrome window yourself.** Initial sign-in cannot be completed in an unattended environment, and an agent must not ask you for a Costco password or session token.
+
+## Development
+
+```sh
+git clone https://github.com/sandeepgangarapu/costco-price-matcher.git
+cd costco-price-matcher
+./costco help
+```
+
+The launcher installs dependencies from `package-lock.json` as needed and builds. For direct npm commands, select the same supported Node runtime first (`nvm use` if applicable):
+
+```sh
+npm test
+npm run typecheck
+npm run lint
+npm run format:check
+npm run build
+```
+
+Tests use synthetic data and injected browser/network/mail boundaries; they do not require Costco sign-in or send real messages. Historical design notes are in `docs/superpowers/`.
+
+To update a clean checkout, run `git pull --ff-only` and then `./costco help`. Local settings, session, and reports remain in your home folder. Do not delete that folder as part of an update.

@@ -14,7 +14,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "format:check": "prettier --check src tests package.json tsconfig.json vitest.config.ts eslint.config.js .prettierrc.json",
+    "format:check": "prettier --check src tests scripts README.md AGENTS.md package.json tsconfig.json vitest.config.ts eslint.config.js .prettierrc.json",
     "build": "tsc && chmod +x dist/cli.js",
     "probe:live-price": "node --import tsx scripts/live-price-probe.ts",
     "start": "node dist/cli.js"

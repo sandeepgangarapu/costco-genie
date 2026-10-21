@@ -16,6 +16,7 @@ import {
 
 const PRODUCT_ENDPOINT =
   'https://ecom-api.costco.com/ebusiness/product/v1/products/graphql';
+// Public Costco storefront application ID; this is not a member credential.
 const PRODUCT_CLIENT_ID = '4900eb1f-0c10-4bd9-99c3-c59e6c1ecebf';
 const MAX_BATCH_SIZE = 25;
 // Each unofficial HTTP batch is bounded so the parent-held run lock releases.
@@ -62,8 +63,8 @@ export interface WarehousePriceOptions {
   readonly now?: () => Date;
   readonly timeoutMilliseconds?: number;
   readonly sameDayMarkupPercent?: number;
-  readonly sameDayPostalCode?: string;
-  readonly sameDayRepresentativeAddress?: string;
+  readonly sameDayPostalCode?: string | null;
+  readonly sameDayRepresentativeAddress?: string | null;
   readonly sameDayPriceFetcher?: (
     requests: readonly PriceRequest[],
     options: SameDayPriceOptions,
@@ -460,7 +461,11 @@ async function fetchSameDayEvidence(
 }> {
   const observedAt = observed.toISOString();
   const postalCode = options.sameDayPostalCode;
-  if (postalCode === undefined || options.sameDayMarkupPercent === undefined) {
+  if (
+    postalCode == null ||
+    options.sameDayRepresentativeAddress == null ||
+    options.sameDayMarkupPercent === undefined
+  ) {
     return {
       items: [],
       diagnostic: diagnostic(
@@ -479,7 +484,7 @@ async function fetchSameDayEvidence(
     items = await sameDayPriceFetcher(requests, {
       now: () => observed,
       postalCode,
-      deliveryAddress: options.sameDayRepresentativeAddress,
+      deliveryAddress: options.sameDayRepresentativeAddress ?? undefined,
       timeout: SAME_DAY_REQUEST_TIMEOUT_MILLISECONDS,
     });
   } catch {

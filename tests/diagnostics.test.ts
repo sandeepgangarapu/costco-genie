@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { sanitizeDiagnosticText } from '../src/lib/diagnostics.js';
+import { syntheticJwt, syntheticUnsecuredJwt } from './fixtures/jwt.js';
 
 describe('sanitizeDiagnosticText', () => {
   it.each([
@@ -9,18 +10,12 @@ describe('sanitizeDiagnosticText', () => {
     ['quoted authorization', '"Authorization": "Basic quoted-secret"'],
     ['quoted access token', '"access_token":"quoted-access-secret"'],
     ['quoted refresh token', "'refreshToken':'quoted-refresh-secret'"],
-    [
-      'split JWT',
-      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJtZW1i\u200BLTEyMyJ9.dGVzdC1zaWduYXR1cmU',
-    ],
+    ['split JWT', syntheticJwt.replace('.', '.\u200B')],
     ['newline access token', 'failure\naccess_token=access-secret'],
     ['newline authorization', 'failure\nAuthorization: Basic basic-secret'],
     ['newline bearer', 'failure\nBearer bearer-secret'],
     ['tab bearer', 'Bearer\tbearer-tab-secret'],
-    [
-      'newline JWT',
-      'failure\neyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJtZW1iZXItMTIzIn0.dGVzdC1zaWduYXR1cmU',
-    ],
+    ['newline JWT', `failure\n${syntheticJwt}`],
     ['control-split authorization', 'Authoriza\ttion: Basic tab-secret'],
     [
       'format-split authorization scheme',
@@ -31,10 +26,7 @@ describe('sanitizeDiagnosticText', () => {
       'Authorization: Ba\tsic basic-tab-secret',
     ],
     ['control-split token value', 'access_token=access\ttoken-secret'],
-    [
-      'unsecured JWT with empty signature',
-      'eyJhbGciOiJub25lIn0.eyJzdWIiOiJzZWNyZXQifQ.',
-    ],
+    ['unsecured JWT with empty signature', syntheticUnsecuredJwt],
     [
       'quoted authorization with comma',
       '"Authorization":"Bearer secret,authorization-tail" after',

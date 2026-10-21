@@ -3,6 +3,7 @@ import {
   existsSync,
   lstatSync,
   mkdtempSync,
+  readFileSync,
   mkdirSync,
   rmSync,
   writeFileSync,
@@ -34,6 +35,38 @@ afterEach(() => {
 });
 
 describe('createDefaultCliActions composition', () => {
+  it('persists startup choices and preserves settings on a second setup without prompting', async () => {
+    const homeDirectory = temporaryHome();
+    const actions = createDefaultCliActions({
+      homeDirectory,
+      dependencies: {
+        promptSetup: async () => {
+          throw new Error('explicit options must not prompt');
+        },
+      },
+    });
+    const configFile = await actions.setup({
+      sameDayPostalCode: '10001',
+      sameDayRepresentativeAddress: '123 Example St',
+      emailRecipient: 'you@example.com',
+    });
+    await actions.setup({});
+    expect(JSON.parse(readFileSync(configFile, 'utf8'))).toMatchObject({
+      sameDayPostalCode: '10001',
+      sameDayRepresentativeAddress: '123 Example St',
+      emailRecipient: 'you@example.com',
+    });
+    await actions.setup({
+      sameDayPostalCode: null,
+      sameDayRepresentativeAddress: null,
+    });
+    expect(JSON.parse(readFileSync(configFile, 'utf8'))).toMatchObject({
+      sameDayPostalCode: null,
+      sameDayRepresentativeAddress: null,
+      emailRecipient: 'you@example.com',
+    });
+    expect(lstatSync(configFile).mode & 0o777).toBe(0o600);
+  });
   it('does not initialize SQLite when the parent-held run lock is unavailable', async () => {
     const homeDirectory = temporaryHome();
     let databaseOpens = 0;

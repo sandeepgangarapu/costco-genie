@@ -7,7 +7,7 @@
     "registerNumber": "7",
     "transactionNumber": "4567",
     "transactionType": "Purchase",
-    "transactionBarcode": "211290123456789",
+    "transactionBarcode": "0000000000000000000002",
     "itemArray": [
       {
         "itemNumber": "100978861",

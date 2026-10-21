@@ -336,6 +336,40 @@ describe('fetchWarehousePrices', () => {
 });
 
 describe('Same-Day report evidence', () => {
+  it.each([
+    { sameDayPostalCode: null, sameDayRepresentativeAddress: null },
+    { sameDayPostalCode: '10001', sameDayRepresentativeAddress: null },
+    { sameDayPostalCode: '10001' },
+    {},
+  ])(
+    'skips the Same-Day browser unless both location settings are provided: %j',
+    async (location) => {
+      let browserCalls = 0;
+      const result = await fetchReportPriceEvidence(
+        [request('1753490', '110')],
+        {
+          fetchFn: async (input) =>
+            String(input).includes('/warehouse-savings')
+              ? new Response('<p>No advertised items</p>')
+              : productResponse([]),
+          sameDayMarkupPercent: 13.5,
+          ...location,
+          sameDayPriceFetcher: async () => {
+            browserCalls += 1;
+            return [];
+          },
+        },
+      );
+      expect(browserCalls).toBe(0);
+      expect(result.items[0]?.prices.sameDay).toMatchObject({
+        unitPriceCents: null,
+        unavailableReason: 'source_not_configured',
+      });
+      expect(result.diagnostics).toContainEqual(
+        expect.objectContaining({ channel: 'same_day', status: 'unavailable' }),
+      );
+    },
+  );
   it('uses exact-item guest storefront pricing localized to the configured ZIP', async () => {
     const sameDayCalls: unknown[] = [];
     const fetchFn: typeof fetch = async (input) =>
@@ -347,8 +381,8 @@ describe('Same-Day report evidence', () => {
       fetchFn,
       now: () => new Date(observedAt),
       sameDayMarkupPercent: 13.5,
-      sameDayPostalCode: '98029',
-      sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
+      sameDayPostalCode: '10001',
+      sameDayRepresentativeAddress: '123 Example St, Sample City, NY 10001',
       sameDayPriceFetcher: async (requests, options) => {
         sameDayCalls.push({ requests, options });
         return [
@@ -358,7 +392,7 @@ describe('Same-Day report evidence', () => {
             warehouseNumber: '110',
             observedAt,
             promotionText: null,
-            source: 'same_day_guest_storefront_zip_98029',
+            source: 'same_day_guest_storefront_zip_10001',
             unavailableReason: null,
             unitPriceCents: 1531,
           },
@@ -376,20 +410,20 @@ describe('Same-Day report evidence', () => {
           },
         ],
         options: expect.objectContaining({
-          postalCode: '98029',
-          deliveryAddress: '2520 NE Park Dr, Issaquah, WA 98029',
+          postalCode: '10001',
+          deliveryAddress: '123 Example St, Sample City, NY 10001',
           timeout: 180_000,
         }),
       },
     ]);
     expect(result.items[0]?.prices.sameDay).toMatchObject({
       unitPriceCents: 1531,
-      source: 'same_day_guest_storefront_zip_98029',
+      source: 'same_day_guest_storefront_zip_10001',
     });
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({
         channel: 'same_day',
-        source: 'same_day_guest_storefront_zip_98029',
+        source: 'same_day_guest_storefront_zip_10001',
         status: 'ok',
       }),
     );
@@ -405,8 +439,8 @@ describe('Same-Day report evidence', () => {
       fetchFn,
       now: () => new Date(observedAt),
       sameDayMarkupPercent: 13.5,
-      sameDayPostalCode: '98029',
-      sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
+      sameDayPostalCode: '10001',
+      sameDayRepresentativeAddress: '123 Example St, Sample City, NY 10001',
       sameDayPriceFetcher: async () => {
         throw new Error('storefront crashed');
       },
@@ -431,8 +465,8 @@ describe('Same-Day report evidence', () => {
       fetchFn,
       now: () => new Date(observedAt),
       sameDayMarkupPercent: 13.5,
-      sameDayPostalCode: '98029',
-      sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
+      sameDayPostalCode: '10001',
+      sameDayRepresentativeAddress: '123 Example St, Sample City, NY 10001',
       sameDayPriceFetcher: async () => [
         {
           channel: 'same_day',
@@ -440,7 +474,7 @@ describe('Same-Day report evidence', () => {
           warehouseNumber: '110',
           observedAt,
           promotionText: null,
-          source: 'same_day_guest_storefront_zip_98029',
+          source: 'same_day_guest_storefront_zip_10001',
           unavailableReason: 'deadline_exceeded',
           unitPriceCents: null,
         },
@@ -479,7 +513,8 @@ describe('fetchReportPriceEvidence', () => {
         fetchFn,
         now: () => new Date(observedAt),
         sameDayMarkupPercent: 13.5,
-        sameDayPostalCode: '98029',
+        sameDayPostalCode: '10001',
+        sameDayRepresentativeAddress: '123 Example St, Sample City, NY 10001',
         sameDayPriceFetcher: async (requests) => {
           sameDayRequests.push(requests);
           return [];
@@ -577,7 +612,8 @@ describe('fetchReportPriceEvidence', () => {
       fetchFn,
       now: () => new Date(observedAt),
       sameDayMarkupPercent: 13.5,
-      sameDayPostalCode: '98029',
+      sameDayPostalCode: '10001',
+      sameDayRepresentativeAddress: '123 Example St, Sample City, NY 10001',
       sameDayPriceFetcher: async () => {
         sameDayCalls += 1;
         throw new Error('Same-Day must be skipped');
@@ -824,7 +860,8 @@ describe('fetchReportPriceEvidence', () => {
       fetchFn,
       now: () => new Date('2026-10-02T21:48:11.099Z'),
       sameDayMarkupPercent: 13.5,
-      sameDayPostalCode: '98029',
+      sameDayPostalCode: '10001',
+      sameDayRepresentativeAddress: '123 Example St, Sample City, NY 10001',
       sameDayPriceFetcher: async () => [
         {
           channel: 'same_day',
@@ -832,7 +869,7 @@ describe('fetchReportPriceEvidence', () => {
           warehouseNumber: '110',
           observedAt: '2026-10-02T21:48:11.099Z',
           promotionText: null,
-          source: 'same_day_guest_storefront_zip_98029',
+          source: 'same_day_guest_storefront_zip_10001',
           unavailableReason: null,
           unitPriceCents: 2269,
         },

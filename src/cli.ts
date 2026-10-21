@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createDefaultCliActions, type CliActions } from './cli/actions.js';
 import type { DoctorReport } from './cli/doctor.js';
+import { parseSetupOptions, SetupUsageError } from './cli/setup.js';
 import { AuthRequiredError } from './costco/errors.js';
 import type { RunSummary } from './domain/types.js';
 import { sanitizeDiagnosticText } from './lib/diagnostics.js';
@@ -34,6 +35,15 @@ Commands:
   uninstall-agent   Unload and remove the macOS LaunchAgent
   doctor            Check offline runtime, storage, Mail presence, and browser-profile readiness
   help               Show this help
+
+Setup (asks optional questions in an interactive terminal):
+  ./costco setup
+  ./costco setup --zip YOUR_ZIP --address "YOUR_NEARBY_ADDRESS" --email you@example.com
+  ./costco setup --no-same-day
+
+Settings are saved outside the repository in ~/.costco-price-matcher/config.json.
+Live checks require ./costco login: sign in to Costco in the dedicated Chrome
+window, complete MFA/CAPTCHA yourself, then close that window before running.
 `;
 
 export interface CliIo {
@@ -60,9 +70,15 @@ export async function runCli(
   try {
     switch (command) {
       case 'setup':
-        requireNoOptions(command, options);
-        io.log(`Setup complete. Configuration: ${await actions.setup()}`);
-        io.log('Next: run `costco login`.');
+        io.log(
+          `Setup complete. Configuration: ${await actions.setup(parseSetupOptions(options))}`,
+        );
+        io.log(
+          'Next: run `./costco login`, sign in to Costco, then close the dedicated Chrome window.',
+        );
+        io.log(
+          'Run `./costco run` for your first check. Open ~/.costco-price-matcher/reports/latest.html to see the report.',
+        );
         return 0;
       case 'login':
         requireNoOptions(command, options);
@@ -107,7 +123,9 @@ export async function runCli(
     }
   } catch (error) {
     io.error(commandError(error));
-    return error instanceof CliUsageError ? 64 : 1;
+    return error instanceof CliUsageError || error instanceof SetupUsageError
+      ? 64
+      : 1;
   }
 }
 

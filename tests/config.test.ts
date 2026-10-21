@@ -4,6 +4,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -12,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadConfig } from '../src/config/config.js';
+import { loadConfig, saveConfig } from '../src/config/config.js';
 import { appPaths } from '../src/config/paths.js';
 
 const temporaryHomes: string[] = [];
@@ -41,8 +42,8 @@ describe('loadConfig', () => {
       minimumSavingsCents: 1,
       priceBatchSize: 25,
       sameDayMarkupPercent: 13.5,
-      sameDayPostalCode: '98029',
-      sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
+      sameDayPostalCode: null,
+      sameDayRepresentativeAddress: null,
       scheduledHour: 9,
       scheduledMinute: 0,
       scheduledWeekday: null,
@@ -72,9 +73,55 @@ describe('loadConfig', () => {
       emailRecipient: 'me@example.com',
       priceBatchSize: 25,
       sameDayMarkupPercent: 13.5,
-      sameDayPostalCode: '98029',
-      sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
+      sameDayPostalCode: null,
+      sameDayRepresentativeAddress: null,
     });
+  });
+
+  it('saves personal settings privately outside the checkout and keeps other settings', () => {
+    const paths = appPaths(createTemporaryHome());
+    const original = loadConfig(paths);
+    saveConfig(paths, {
+      ...original,
+      scheduledHour: 17,
+      emailRecipient: 'you@example.com',
+      sameDayPostalCode: '10001',
+      sameDayRepresentativeAddress: '123 Example St',
+    });
+    const updated = loadConfig(paths);
+    saveConfig(paths, {
+      ...updated,
+      sameDayPostalCode: null,
+      sameDayRepresentativeAddress: null,
+    });
+    expect(loadConfig(paths)).toMatchObject({
+      scheduledHour: 17,
+      emailRecipient: 'you@example.com',
+      sameDayPostalCode: null,
+      sameDayRepresentativeAddress: null,
+    });
+    expect(lstatSync(paths.configFile).mode & 0o777).toBe(0o600);
+  });
+
+  it('leaves an existing config intact if replacement settings are invalid', () => {
+    const paths = appPaths(createTemporaryHome());
+    saveConfig(paths, { scheduledHour: 17 });
+    const before = readFileSync(paths.configFile, 'utf8');
+    expect(() => saveConfig(paths, { sameDayPostalCode: 'invalid' })).toThrow();
+    expect(readFileSync(paths.configFile, 'utf8')).toBe(before);
+  });
+
+  it('refuses to save through a symbolic link', () => {
+    const home = createTemporaryHome();
+    const paths = appPaths(home);
+    loadConfig(paths);
+    const target = join(home, 'outside.json');
+    writeFileSync(target, '{}');
+    symlinkSync(target, paths.configFile);
+    expect(() =>
+      saveConfig(paths, { emailRecipient: 'you@example.com' }),
+    ).toThrow(/unsafe|symbolic link/i);
+    expect(readFileSync(target, 'utf8')).toBe('{}');
   });
 
   it('creates and hardens private application directories and an existing config file', () => {
@@ -141,8 +188,8 @@ describe('loadConfig', () => {
     { minimumSavingsCents: -1 },
     { sameDayMarkupPercent: 0 },
     { sameDayMarkupPercent: 100 },
-    { sameDayPostalCode: '9802' },
-    { sameDayPostalCode: '9802A' },
+    { sameDayPostalCode: '1000' },
+    { sameDayPostalCode: '1000A' },
     { sameDayRepresentativeAddress: '' },
   ])('rejects invalid configuration ranges: %j', (invalidConfig) => {
     const paths = appPaths(createTemporaryHome());

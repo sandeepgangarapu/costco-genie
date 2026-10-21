@@ -1,7 +1,20 @@
-import { evaluateLivePriceProbe } from '../dist/costco/live-price-probe.js';
-import { fetchWarehousePrices } from '../dist/costco/price-client.js';
+import { evaluateLivePriceProbe } from '../src/costco/live-price-probe.js';
+import { fetchWarehousePrices } from '../src/costco/price-client.js';
 
-const sample = { itemNumber: '100978861', warehouseNumber: '129' };
+const [itemNumber, warehouseNumber, ...extra] = process.argv.slice(2);
+if (
+  !itemNumber ||
+  !warehouseNumber ||
+  extra.length > 0 ||
+  !/^\d+$/.test(itemNumber) ||
+  !/^\d+$/.test(warehouseNumber)
+) {
+  console.error(
+    'Usage: npm run probe:live-price -- YOUR_ITEM_NUMBER YOUR_WAREHOUSE_NUMBER',
+  );
+  process.exit(64);
+}
+const sample = { itemNumber, warehouseNumber };
 const samples = [sample];
 const observations = await fetchWarehousePrices(samples);
 const result = evaluateLivePriceProbe(samples, observations);

@@ -32,7 +32,7 @@ describe('fetchReceipts', () => {
 
     expect(adapted.transactions[0]).toMatchObject({
       purchasedAt: '2023-10-25T14:30:00',
-      receiptId: '21000100602972310251430',
+      receiptId: '0000000000000000000001',
       warehouseNumber: '1',
     });
     expect(adapted.transactions[0]?.items[0]).toEqual({
@@ -422,7 +422,7 @@ describe('fetchReceipts', () => {
             },
           ],
           purchasedAt: '2026-08-10T18:30:00.000Z',
-          receiptId: '211290123456789',
+          receiptId: '0000000000000000000002',
           transactionType: 'Purchase',
           warehouseNumber: '129',
         },
@@ -433,13 +433,13 @@ describe('fetchReceipts', () => {
         couponCents: 200,
         description: 'Kirkland Trail Mix',
         grossUnitCents: 999,
-        id: 'c668212a7867d83dca123a6f1942d802fc87fce6a69c9e60fb4dbe944f0b6b21',
+        id: '0d99e59fdbfa0aa72f4479e8ba8e89ab6bcbc4714eb602060b8c95e9bbce66f8',
         itemNumber: '100978861',
         paidUnitCents: 899,
         purchaseChannel: 'warehouse',
         purchasedAt: '2026-08-10T18:30:00.000Z',
         quantity: 2,
-        receiptId: '211290123456789',
+        receiptId: '0000000000000000000002',
         warehouseNumber: '129',
       },
     ]);

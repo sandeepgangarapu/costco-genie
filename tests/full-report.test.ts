@@ -158,7 +158,7 @@ describe('writeFullReport', () => {
     const original = sampleReport({
       ...samplePriceChannels(),
       warehouse: unavailablePrice('warehouse', 'not_warehouse_price'),
-      sameDay: availablePrice('same_day', 1_531, 'costco_same_day_zip_98029'),
+      sameDay: availablePrice('same_day', 1_531, 'costco_same_day_zip_10001'),
     });
     const originalRow = original.rows[0];
     if (!originalRow) throw new Error('fixture row missing');
@@ -185,7 +185,7 @@ describe('writeFullReport', () => {
     const csv = readFileSync(files.csvFile, 'utf8');
     const html = readFileSync(files.htmlFile, 'utf8');
 
-    expect(csv).toContain('$15.31,costco_same_day_zip_98029');
+    expect(csv).toContain('$15.31,costco_same_day_zip_10001');
     expect(csv).toContain(
       '$13.49,13.5%,$2.50,Unavailable,23,estimated_opportunity',
     );
@@ -339,7 +339,7 @@ describe('writeFullReport', () => {
     const original = sampleReport({
       ...samplePriceChannels(),
       warehouse: unavailablePrice('warehouse', 'not_warehouse_price'),
-      sameDay: availablePrice('same_day', 1_531, 'costco_same_day_zip_98029'),
+      sameDay: availablePrice('same_day', 1_531, 'costco_same_day_zip_10001'),
     });
     const row = original.rows[0];
     if (!row) throw new Error('fixture row missing');

@@ -1,8 +1,10 @@
-import { readFileSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { readFileSync, renameSync, rmSync } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 
 import {
+  createPrivateTextFile,
   ensurePrivateDirectory,
   inspectRegularFileWithoutMutation,
   pathExistsWithoutFollowing,
@@ -23,8 +25,11 @@ const configSchema = z.object({
   priceBatchSize: z.number().int().min(1).max(25),
   minimumSavingsCents: z.number().int().min(0),
   sameDayMarkupPercent: z.number().positive().lt(100),
-  sameDayPostalCode: z.string().regex(/^\d{5}$/u),
-  sameDayRepresentativeAddress: z.string().trim().min(1),
+  sameDayPostalCode: z
+    .string()
+    .regex(/^\d{5}$/u)
+    .nullable(),
+  sameDayRepresentativeAddress: z.string().trim().min(1).nullable(),
 });
 
 export type AppConfig = Readonly<z.infer<typeof configSchema>>;
@@ -42,8 +47,8 @@ export const DEFAULT_CONFIG: AppConfig = Object.freeze({
   priceBatchSize: 25,
   minimumSavingsCents: 1,
   sameDayMarkupPercent: 13.5,
-  sameDayPostalCode: '98029',
-  sameDayRepresentativeAddress: '2520 NE Park Dr, Issaquah, WA 98029',
+  sameDayPostalCode: null,
+  sameDayRepresentativeAddress: null,
 });
 
 function ensureDirectories(paths: AppPaths): void {
@@ -74,7 +79,28 @@ export function readConfigWithoutMutation(paths: AppPaths): AppConfig {
   return parseConfig(JSON.parse(readFileSync(paths.configFile, 'utf8')));
 }
 
-function parseConfig(value: unknown): AppConfig {
+export function saveConfig(paths: AppPaths, value: unknown): void {
+  const config = parseConfig(value);
+  ensureDirectories(paths);
+  if (pathExistsWithoutFollowing(paths.configFile)) {
+    inspectRegularFileWithoutMutation(paths.configFile);
+  }
+  const temporaryFile = join(
+    dirname(paths.configFile),
+    `.config-${randomUUID()}.tmp`,
+  );
+  try {
+    createPrivateTextFile(
+      temporaryFile,
+      `${JSON.stringify(config, null, 2)}\n`,
+    );
+    renameSync(temporaryFile, paths.configFile);
+  } finally {
+    rmSync(temporaryFile, { force: true });
+  }
+}
+
+export function parseConfig(value: unknown): AppConfig {
   const partialConfig = configSchema.partial().parse(value);
   const config = configSchema.parse({ ...DEFAULT_CONFIG, ...partialConfig });
 

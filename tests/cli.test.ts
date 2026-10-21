@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 import Sqlite from 'better-sqlite3';
+import { syntheticJwt } from './fixtures/jwt.js';
 
 import type { RunSummary } from '../src/domain/types.js';
 import { AuthRequiredError } from '../src/costco/errors.js';
@@ -143,6 +144,37 @@ describe('runCli', () => {
 
     expect(exitCode).toBe(0);
     expect(harness.calls).toEqual(['run:true']);
+  });
+
+  it('passes setup choices to the action and explains the dedicated browser login', async () => {
+    let options: unknown;
+    const harness = cliHarness({
+      setup: async (value) => {
+        options = value;
+        return '/tmp/config.json';
+      },
+    });
+    expect(
+      await runCli(
+        ['setup', '--zip', '10001', '--address', '123 Example St'],
+        harness.actions,
+        harness.io,
+      ),
+    ).toBe(0);
+    expect(options).toEqual({
+      sameDayPostalCode: '10001',
+      sameDayRepresentativeAddress: '123 Example St',
+    });
+    expect(harness.output.join('\n')).toContain('dedicated Chrome window');
+  });
+
+  it('rejects invalid setup options before touching local settings', async () => {
+    const harness = cliHarness();
+    expect(
+      await runCli(['setup', '--zip', '1234'], harness.actions, harness.io),
+    ).toBe(64);
+    expect(harness.calls).toEqual([]);
+    expect(harness.errors.join('\n')).toContain('five-digit ZIP');
   });
 
   it('prints the generated HTML, CSV, and JSON report paths', async () => {
@@ -286,8 +318,7 @@ describe('runCli', () => {
   });
 
   it('redacts a standalone JWT from thrown command errors', async () => {
-    const jwt =
-      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJtZW1iZXItMTIzIn0.dGVzdC1zaWduYXR1cmU';
+    const jwt = syntheticJwt;
     const harness = cliHarness({
       run: async () => {
         throw new Error(

@@ -62,7 +62,7 @@ const LIVE_RECEIPT = {
     },
   ],
   registerNumber: '7',
-  transactionBarcode: '211290123456789',
+  transactionBarcode: '0000000000000000000002',
   transactionDateTime: '2026-08-10T18:30:00.000Z',
   transactionNumber: '4567',
   transactionType: 'Purchase',
@@ -1967,11 +1967,16 @@ describe('runPriceCheck', () => {
         unitPriceCents: null,
       }) as const;
     const deps = dependencies({
+      config: {
+        ...DEFAULT_CONFIG,
+        sameDayPostalCode: '10001',
+        sameDayRepresentativeAddress: '123 Example St, Sample City, NY 10001',
+      },
       fetchEvidence: async (_requests, options) => {
         expect(options.sameDayMarkupPercent).toBe(13.5);
-        expect(options.sameDayPostalCode).toBe('98029');
+        expect(options.sameDayPostalCode).toBe('10001');
         expect(options.sameDayRepresentativeAddress).toBe(
-          '2520 NE Park Dr, Issaquah, WA 98029',
+          '123 Example St, Sample City, NY 10001',
         );
         return {
           diagnostics: [],
@@ -1988,7 +1993,7 @@ describe('runPriceCheck', () => {
                   channel: 'same_day',
                   observedAt: NOW.toISOString(),
                   promotionText: null,
-                  source: 'costco_same_day_zip_98029',
+                  source: 'costco_same_day_zip_10001',
                   unavailableReason: null,
                   unitPriceCents: 900,
                 },
