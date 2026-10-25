@@ -5,6 +5,7 @@ import {
   fstatSync,
   lstatSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   renameSync,
   rmSync,
@@ -27,6 +28,7 @@ export function legacyDataDirectory(homeDirectory: string): string {
 
 export interface DataMigrationOptions {
   readonly rename?: (source: string, destination: string) => void;
+  readonly replaceConfig?: (source: string, destination: string) => void;
   readonly isProcessAlive?: (pid: number) => boolean;
 }
 
@@ -37,16 +39,19 @@ export async function migrateLegacyDataDirectory(
 ): Promise<void> {
   const destination = appPaths(homeDirectory).dataDir;
   const legacy = legacyDataDirectory(homeDirectory);
-  if (
-    pathExistsWithoutFollowing(destination) ||
-    !pathExistsWithoutFollowing(legacy)
-  )
+  if (pathExistsWithoutFollowing(destination)) {
+    assertConfigMigrationComplete(destination);
     return;
+  }
+  if (!pathExistsWithoutFollowing(legacy)) return;
 
   const original = assertPrivateDirectory(legacy);
   await new FileRunLock(join(legacy, 'run.lock')).runExclusive(async () => {
     // A different invocation may have migrated while this one acquired flock.
-    if (pathExistsWithoutFollowing(destination)) return;
+    if (pathExistsWithoutFollowing(destination)) {
+      assertConfigMigrationComplete(destination);
+      return;
+    }
     const current = assertPrivateDirectory(legacy);
     if (current.dev !== original.dev || current.ino !== original.ino) {
       throw new Error('Legacy data directory changed during migration; retry.');
@@ -78,7 +83,7 @@ export async function migrateLegacyDataDirectory(
       }
       if (config !== null) {
         try {
-          renameSync(
+          (options.replaceConfig ?? renameSync)(
             join(destination, temporaryName),
             join(destination, 'config.json'),
           );
@@ -96,6 +101,22 @@ export async function migrateLegacyDataDirectory(
       if (!moved) rmSync(stagedConfig, { force: true });
     }
   });
+}
+
+function assertConfigMigrationComplete(destination: string): void {
+  // Do not follow a linked root just to inspect migration state.
+  const stat = lstatSync(destination);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) return;
+  const pending = readdirSync(destination).find((name) =>
+    /^\.config-migration-[\da-f-]+\.tmp$/u.test(name),
+  );
+  if (pending) {
+    throw new Error(
+      `Data moved to ${destination}, but config path rewriting is incomplete. ` +
+        `The prepared configuration is ${join(destination, pending)}; ` +
+        'restore it as config.json before retrying.',
+    );
+  }
 }
 
 function assertPrivateDirectory(path: string): Stats {

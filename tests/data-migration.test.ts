@@ -297,6 +297,38 @@ describe('migrateLegacyDataDirectory', () => {
     expect(existsSync(legacy)).toBe(true);
     expect(existsSync(paths.dataDir)).toBe(false);
   });
+
+  it('blocks subsequent commands after a failed config replacement until the prepared config is restored', async () => {
+    const { home, legacy, paths } = fixture();
+    writeFileSync(
+      join(legacy, 'config.json'),
+      JSON.stringify({ smtpConfigPath: join(legacy, 'smtp.json') }),
+    );
+    await expect(
+      migrateLegacyDataDirectory(home, {
+        replaceConfig() {
+          throw new Error('TEST-config replacement failed');
+        },
+      }),
+    ).rejects.toThrow('config path rewriting failed');
+    expect(existsSync(legacy)).toBe(false);
+    const prepared = readdirSync(paths.dataDir).find((name) =>
+      name.startsWith('.config-migration-'),
+    )!;
+    const oldConfig = readFileSync(paths.configFile, 'utf8');
+    expect(oldConfig).toContain(legacy);
+    await expect(migrateLegacyDataDirectory(home)).rejects.toThrow(
+      'config path rewriting is incomplete',
+    );
+    const actions = createDefaultCliActions({ homeDirectory: home });
+    await expect(actions.run({ scheduled: true })).rejects.toThrow(prepared);
+    expect(readFileSync(paths.configFile, 'utf8')).toBe(oldConfig);
+    renameSync(join(paths.dataDir, prepared), paths.configFile);
+    await expect(migrateLegacyDataDirectory(home)).resolves.toBeUndefined();
+    expect(JSON.parse(readFileSync(paths.configFile, 'utf8'))).toEqual({
+      smtpConfigPath: join(paths.dataDir, 'smtp.json'),
+    });
+  });
 });
 
 describe('CLI migration entry points', () => {
