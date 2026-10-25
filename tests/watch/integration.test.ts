@@ -501,6 +501,12 @@ describe('independent scheduled dispatch', () => {
         new Date(2026, 9, 24, 8),
       ),
     ).toBe(false);
+    expect(receiptScheduleDue(c, null, new Date(2026, 9, 22, 10))).toBe(false);
+    expect(receiptScheduleDue(c, null, new Date(2026, 9, 23, 8))).toBe(false);
+    expect(receiptScheduleDue(c, null, new Date(2026, 9, 23, 16))).toBe(true);
+    expect(
+      receiptScheduleDue(DEFAULT_CONFIG, null, new Date(2026, 9, 23, 8)),
+    ).toBe(false);
   });
   it('holds the matcher lock sequentially for watches and receipts; skips successful watches today even when receipts need login', async () => {
     const h = home();

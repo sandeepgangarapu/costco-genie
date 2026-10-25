@@ -2397,6 +2397,32 @@ describe('runPriceCheck', () => {
     deps.database.close();
   });
 
+  it('skips the first weekly RunAtLoad off-schedule and uses that history for sleep catch-up', async () => {
+    const readTokens = vi.fn(async () => {
+      throw new AuthRequiredError();
+    });
+    const deps = dependencies({
+      config: { ...DEFAULT_CONFIG, scheduledWeekday: 5, scheduledHour: 16 },
+      readTokens,
+    });
+    for (const time of [new Date(2026, 9, 22, 10), new Date(2026, 9, 23, 8)])
+      expect(
+        (await runPriceCheck(deps, { scheduled: true, now: () => time }))
+          .outcome,
+      ).toBe('skipped');
+    expect(readTokens).not.toHaveBeenCalled();
+    expect(
+      (
+        await runPriceCheck(deps, {
+          scheduled: true,
+          now: () => new Date(2026, 9, 24, 11),
+        })
+      ).outcome,
+    ).toBe('auth_required');
+    expect(readTokens).toHaveBeenCalledOnce();
+    deps.database.close();
+  });
+
   it('skips a three-day-interval scheduled run until the freshness window elapses', async () => {
     const config = { ...DEFAULT_CONFIG, scheduledIntervalDays: 3 };
     const prior = {

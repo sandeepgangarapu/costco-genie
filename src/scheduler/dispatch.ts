@@ -9,6 +9,16 @@ export function receiptScheduleDue(
   now: Date,
 ): boolean {
   if (last !== null && Date.parse(last.finishedAt) > now.getTime()) return true;
+  if (last === null) {
+    // RunAtLoad/daily watches must not invent a missed receipt trigger when
+    // there is no history yet. The initial skip records a catch-up anchor.
+    return (
+      (config.scheduledWeekday === null ||
+        now.getDay() === config.scheduledWeekday) &&
+      now.getHours() * 60 + now.getMinutes() >=
+        config.scheduledHour * 60 + config.scheduledMinute
+    );
+  }
   const due = new Date(now);
   due.setHours(config.scheduledHour, config.scheduledMinute, 0, 0);
   if (due > now) due.setDate(due.getDate() - 1);
@@ -16,7 +26,7 @@ export function receiptScheduleDue(
     while (due.getDay() !== config.scheduledWeekday)
       due.setDate(due.getDate() - 1);
   }
-  return last === null || Date.parse(last.finishedAt) < due.getTime();
+  return Date.parse(last.finishedAt) < due.getTime();
 }
 export interface ScheduledSummary extends RunSummary {
   readonly watchCheck?: string;
