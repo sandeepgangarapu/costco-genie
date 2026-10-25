@@ -115,6 +115,35 @@ describe('migrateLegacyDataDirectory', () => {
     expect(existsSync(paths.databaseFile)).toBe(false);
   });
 
+  it('keeps the loaded legacy agent log paths openable for later triggers without duplicating private data', async () => {
+    const { home, legacy, paths } = fixture();
+    const plist = launchAgentPath(home, LEGACY_AGENT_LABEL);
+    mkdirSync(join(home, 'Library', 'LaunchAgents'), { recursive: true });
+    writeFileSync(plist, 'TEST-legacy plist');
+    mkdirSync(join(legacy, 'logs'), { mode: 0o700 });
+    writeFileSync(join(legacy, 'logs', 'stdout.log'), 'TEST-previous output', {
+      mode: 0o600,
+    });
+    const databaseInode = lstatSync(join(legacy, 'costco.sqlite')).ino;
+    await migrateLegacyDataDirectory(home);
+    expect(readFileSync(join(paths.logDir, 'stdout.log'), 'utf8')).toBe(
+      'TEST-previous output',
+    );
+    expect(lstatSync(paths.databaseFile).ino).toBe(databaseInode);
+    expect(readdirSync(legacy)).toEqual(['logs']);
+    expect(readdirSync(join(legacy, 'logs'))).toEqual([]);
+    expect(lstatSync(legacy).mode & 0o777).toBe(0o700);
+    expect(lstatSync(join(legacy, 'logs')).mode & 0o777).toBe(0o700);
+    // launchd must be able to open these before the updated CLI can migrate or run.
+    for (const name of ['stdout.log', 'stderr.log'])
+      writeFileSync(join(legacy, 'logs', name), 'TEST-next invocation', {
+        flag: 'a',
+        mode: 0o600,
+      });
+    await migrateLegacyDataDirectory(home);
+    expect(readFileSync(plist, 'utf8')).toBe('TEST-legacy plist');
+  });
+
   it('refuses symlinked legacy directories without accessing their targets', async () => {
     const { home, legacy, paths } = fixture(false);
     const target = join(home, 'target');

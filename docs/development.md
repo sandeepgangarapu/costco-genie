@@ -58,6 +58,8 @@ Config string path values inside the old directory (including `smtpConfigPath`) 
 
 After the repository is renamed to `sandeepgangarapu/costco-genie` and the checkout moved to `~/projects/costco-genie`, rebuild and reinstall the LaunchAgent to record the final absolute paths. Verify status/doctor, settings paths and permissions, and that only the new service remains. The installer recognizes an existing legacy `~/costco-price-matcher` checkout and explains how to update/move it manually; it never moves checkouts.
 
+If the legacy agent plist still exists during migration, the app recreates only an empty private `~/.costco-price-matcher/logs/` directory. Launchd needs those log parents before it can start later invocations of the updated CLI. All existing logs and private data move to the new directory; nothing is copied. Until reinstall, later legacy-agent output can appear in that compatibility log directory. Run `./costco install-agent` after every upgrade to replace the legacy service, even if the checkout did not move. If replacement installation fails, its transaction restores the legacy plist and its prior loaded state.
+
 ## Watchlist implementation
 
 `src/watch/` contains the ported low policy, check transaction/delivery flow, namespaced store, email rendering, CLI actions, and source composition. `src/costco/product.ts`, `online-page.ts`, and `watch-online-client.ts` port URL resolution and online price evidence. Warehouse/display/coupons, Same-Day, file locking, browser CDP lifecycle, email transports, and shared diagnostic redaction use matcher implementations. Tests under `tests/watch/` cover the port and integration with synthetic boundaries.

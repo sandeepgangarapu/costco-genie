@@ -16,10 +16,12 @@ import { join } from 'node:path';
 
 import {
   createPrivateTextFile,
+  ensurePrivateDirectory,
   openPrivateRegularFile,
   pathExistsWithoutFollowing,
 } from '../lib/filesystem.js';
 import { FileRunLock } from '../lib/process.js';
+import { LEGACY_AGENT_LABEL, launchAgentPath } from '../scheduler/launchd.js';
 import { appPaths } from './paths.js';
 
 export function legacyDataDirectory(homeDirectory: string): string {
@@ -68,6 +70,9 @@ export async function migrateLegacyDataDirectory(
       options.isProcessAlive ?? isProcessAlive,
     );
     const config = prepareConfigRewrite(legacy, destination);
+    const legacyAgentExists = pathExistsWithoutFollowing(
+      launchAgentPath(homeDirectory, LEGACY_AGENT_LABEL),
+    );
     const temporaryName = `.config-migration-${randomUUID()}.tmp`;
     const stagedConfig = join(legacy, temporaryName);
     let moved = false;
@@ -103,6 +108,13 @@ export async function migrateLegacyDataDirectory(
             { cause: error },
           );
         }
+      }
+      if (legacyAgentExists) {
+        // launchd reopens StandardOutPath/StandardErrorPath before executing the
+        // updated CLI. Keep their parents usable until the owner reinstalls the
+        // agent. No config, profile, database, lock, or existing log is copied.
+        ensurePrivateDirectory(legacy);
+        ensurePrivateDirectory(join(legacy, 'logs'));
       }
     } finally {
       if (!moved) rmSync(stagedConfig, { force: true });
