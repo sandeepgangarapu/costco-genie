@@ -2303,6 +2303,100 @@ describe('runPriceCheck', () => {
     deps.database.close();
   });
 
+  it.each(['auth_required', 'failure', 'partial_failure'] as const)(
+    'does not retry a completed weekly %s on daily watch triggers, while manual failures do not consume a trigger',
+    async (outcome) => {
+      const config = {
+        ...DEFAULT_CONFIG,
+        scheduledWeekday: 5,
+        scheduledHour: 16,
+      };
+      const readTokens = vi.fn(async () => {
+        throw new AuthRequiredError();
+      });
+      const deps = dependencies({ config, readTokens });
+      const completed: RunSummary = {
+        startedAt: new Date(2026, 9, 23, 16).toISOString(),
+        finishedAt: new Date(2026, 9, 23, 16, 1).toISOString(),
+        outcome,
+        purchasesProcessed: 0,
+        observationsRecorded: 0,
+        candidatesFound: 0,
+        alertsSent: 0,
+        unresolvedPrices: 0,
+      };
+      deps.database.finishRun(
+        deps.database.beginRun(completed.startedAt, true),
+        completed,
+      );
+      expect(
+        (
+          await runPriceCheck(deps, {
+            scheduled: true,
+            now: () => new Date(2026, 9, 24, 8),
+          })
+        ).outcome,
+      ).toBe('skipped');
+      expect(readTokens).not.toHaveBeenCalled();
+      // A later manual failure must neither replace freshness nor consume next Friday.
+      const manual = {
+        ...completed,
+        startedAt: new Date(2026, 9, 30, 15, 59).toISOString(),
+        finishedAt: new Date(2026, 9, 30, 16, 1).toISOString(),
+      };
+      deps.database.finishRun(deps.database.beginRun(manual.startedAt), manual);
+      expect(
+        (
+          await runPriceCheck(deps, {
+            scheduled: true,
+            now: () => new Date(2026, 9, 30, 16, 2),
+          })
+        ).outcome,
+      ).toBe('auth_required');
+      expect(readTokens).toHaveBeenCalledOnce();
+      deps.database.close();
+    },
+  );
+
+  it('catches up a missed weekly trigger after sleep without importing before Friday afternoon', async () => {
+    const deps = dependencies({
+      config: {
+        ...DEFAULT_CONFIG,
+        scheduledWeekday: 5,
+        scheduledHour: 16,
+      },
+    });
+    const prior: RunSummary = {
+      startedAt: new Date(2026, 9, 16, 16).toISOString(),
+      finishedAt: new Date(2026, 9, 16, 16, 1).toISOString(),
+      outcome: 'success',
+      purchasesProcessed: 0,
+      observationsRecorded: 0,
+      candidatesFound: 0,
+      alertsSent: 0,
+      unresolvedPrices: 0,
+    };
+    deps.database.finishRun(
+      deps.database.beginRun(prior.startedAt, true),
+      prior,
+    );
+    for (const time of [new Date(2026, 9, 22, 8), new Date(2026, 9, 23, 8)])
+      expect(
+        (await runPriceCheck(deps, { scheduled: true, now: () => time }))
+          .outcome,
+      ).toBe('skipped');
+    // The Mac sleeps through Friday 16:00 and wakes on Saturday.
+    expect(
+      (
+        await runPriceCheck(deps, {
+          scheduled: true,
+          now: () => new Date(2026, 9, 24, 11),
+        })
+      ).outcome,
+    ).toBe('success');
+    deps.database.close();
+  });
+
   it('skips a three-day-interval scheduled run until the freshness window elapses', async () => {
     const config = { ...DEFAULT_CONFIG, scheduledIntervalDays: 3 };
     const prior = {

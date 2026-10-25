@@ -163,12 +163,12 @@ async function runLocked(
       'skipped',
       emptyNotificationResults(),
     );
-    const skippedRunId = dependencies.database.beginRun(startedAt);
+    const skippedRunId = dependencies.database.beginRun(startedAt, true);
     dependencies.database.finishRun(skippedRunId, skipped);
     return skipped;
   }
 
-  const runId = dependencies.database.beginRun(startedAt);
+  const runId = dependencies.database.beginRun(startedAt, options.scheduled);
   return executeBegunRun(dependencies, runId, started, startedAt, now);
 }
 

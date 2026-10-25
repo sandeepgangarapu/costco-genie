@@ -127,9 +127,14 @@ describe('shared database migration', () => {
     store.close();
     Database.open(path).close();
     const migrated = new Sqlite(path, { readonly: true });
-    expect(
-      tables.map((t) => migrated.prepare(`SELECT * FROM ${t}`).all()),
-    ).toEqual(before);
+    for (const [index, table] of tables.entries()) {
+      const rows = migrated.prepare(`SELECT * FROM ${table}`).all();
+      expect(rows).toHaveLength(before[index].length);
+      expect(rows).toMatchObject(before[index]);
+    }
+    expect(migrated.prepare('SELECT scheduled FROM runs').all()).toEqual([
+      { scheduled: 0 },
+    ]);
     expect(
       migrated
         .prepare(

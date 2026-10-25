@@ -73,6 +73,7 @@ export class Database {
   private readonly runDiagnosticSelection: string;
   private readonly runReportFilesSelection: string;
   private readonly runEstimatedOpportunitiesSelection: string;
+  private readonly scheduledReceiptCondition: string;
 
   private constructor(
     private readonly sqlite: ReturnType<typeof Sqlite>,
@@ -80,6 +81,9 @@ export class Database {
   ) {
     this.sqlite.pragma('foreign_keys = ON');
     if (!initializeSchema) {
+      this.scheduledReceiptCondition = this.hasColumn('runs', 'scheduled')
+        ? 'scheduled = 1'
+        : '0';
       this.observationEvidenceSelection = this.hasColumn(
         'price_observations',
         'evidence_json',
@@ -168,6 +172,8 @@ export class Database {
         ON runs (outcome, finished_at DESC);
     `);
     initializeWatchSchema(this.sqlite);
+    this.ensureColumn('runs', 'scheduled', 'INTEGER NOT NULL DEFAULT 0');
+    this.scheduledReceiptCondition = 'scheduled = 1';
     this.ensureColumn('price_observations', 'evidence_json', 'TEXT');
     this.observationEvidenceSelection = 'evidence_json';
     this.ensureColumn('purchases', 'description', 'TEXT');
@@ -343,10 +349,12 @@ export class Database {
     return rows.map(toPriceObservation);
   }
 
-  beginRun(startedAt: string): number {
+  beginRun(startedAt: string, scheduled = false): number {
     const result = this.sqlite
-      .prepare<[string]>('INSERT INTO runs (started_at) VALUES (?)')
-      .run(startedAt);
+      .prepare<[string, number]>(
+        'INSERT INTO runs (started_at, scheduled) VALUES (?, ?)',
+      )
+      .run(startedAt, Number(scheduled));
     return Number(result.lastInsertRowid);
   }
 
@@ -402,12 +410,12 @@ export class Database {
     return this.lastScheduleCoverage(false);
   }
 
-  /** A freshness skip consumes its receipt trigger just as a successful run does. */
+  /** Every completed scheduled attempt consumes its trigger, including freshness skips. */
   getLastReceiptScheduleCoverage(): RunSummary | null {
     return this.lastScheduleCoverage(true);
   }
 
-  private lastScheduleCoverage(includeSkipped: boolean): RunSummary | null {
+  private lastScheduleCoverage(includeScheduled: boolean): RunSummary | null {
     const row = this.sqlite
       .prepare<[], RunRow>(
         `
@@ -418,7 +426,7 @@ export class Database {
                ${this.runDiagnosticSelection},
                ${this.runReportFilesSelection}
         FROM runs
-        WHERE outcome = 'success' ${includeSkipped ? "OR outcome = 'skipped'" : ''}
+        WHERE outcome = 'success' ${includeScheduled ? `OR outcome = 'skipped' OR (${this.scheduledReceiptCondition} AND outcome IS NOT NULL)` : ''}
         ORDER BY finished_at DESC, id DESC
         LIMIT 1
       `,
