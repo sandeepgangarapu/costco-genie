@@ -281,6 +281,7 @@ export function createDefaultCliActions(
             }
           }),
         receipts,
+        dependencies.now,
       );
     },
     setup: async (options) => {

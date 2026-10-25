@@ -26,7 +26,9 @@ export interface ScheduledSummary extends RunSummary {
 export async function dispatchScheduledChecks(
   watch: () => Promise<{ status: string; text: string }>,
   receipts: () => Promise<RunSummary>,
+  now: () => Date = () => new Date(),
 ): Promise<ScheduledSummary> {
+  const startedAt = now().toISOString();
   let watchCheck: string;
   let watchFailed = false;
   try {
@@ -38,5 +40,23 @@ export async function dispatchScheduledChecks(
     watchFailed = true;
   }
   // Receipt failures cannot stop a watch attempt, and watch failures cannot stop receipts.
-  return { ...(await receipts()), watchCheck, watchFailed };
+  try {
+    return { ...(await receipts()), watchCheck, watchFailed };
+  } catch (error) {
+    // Storage/lock/report cleanup errors can escape the receipt runner. Keep the
+    // completed watch outcome visible in launchd output even in that case.
+    return {
+      startedAt,
+      finishedAt: now().toISOString(),
+      outcome: 'failure',
+      purchasesProcessed: 0,
+      observationsRecorded: 0,
+      candidatesFound: 0,
+      alertsSent: 0,
+      unresolvedPrices: 0,
+      diagnostic: errorSummary(error, 'scheduled receipt check'),
+      watchCheck,
+      watchFailed,
+    };
+  }
 }

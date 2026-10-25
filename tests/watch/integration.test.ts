@@ -24,6 +24,7 @@ import { readWatchProductPricesLocked } from '../../src/costco/browser-session.j
 import { parseDisplayedPrice } from '../../src/costco/online-page.js';
 import { runWatchCli } from '../../src/watch/cli.js';
 import { createDefaultCliActions } from '../../src/cli/actions.js';
+import { runCli } from '../../src/cli.js';
 import { parseSetupOptions } from '../../src/cli/setup.js';
 import {
   dispatchScheduledChecks,
@@ -406,11 +407,36 @@ describe('independent scheduled dispatch', () => {
       status: 'success',
       text: 'TEST-watch',
     }));
-    await expect(
-      dispatchScheduledChecks(watch, async () => {
-        throw new Error('TEST-receipts');
-      }),
-    ).rejects.toThrow('TEST-receipts');
+    const combined = await dispatchScheduledChecks(
+      watch,
+      async () => {
+        throw new Error('TEST-receipts smtp_pass=TEST-secret');
+      },
+      now,
+    );
+    expect(combined).toMatchObject({
+      outcome: 'failure',
+      watchCheck: 'TEST-watch',
+      watchFailed: false,
+      diagnostic: expect.stringContaining('TEST-receipts'),
+    });
+    expect(combined.diagnostic).not.toContain('TEST-secret');
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const actions = createDefaultCliActions({ homeDirectory: home() });
+    expect(
+      await runCli(
+        ['run', '--scheduled'],
+        {
+          ...actions,
+          run: async () => combined,
+        },
+        { log: (s) => logs.push(s), error: (s) => errors.push(s) },
+      ),
+    ).toBe(1);
+    expect(logs).toContain('TEST-watch');
+    expect(logs.join(' ')).toContain('Outcome: failure');
+    expect(errors.join(' ')).toContain('scheduled receipt check');
     expect(watch).toHaveBeenCalledOnce();
   });
   it('preserves weekly receipt timing and catches up on a missed trigger', () => {
