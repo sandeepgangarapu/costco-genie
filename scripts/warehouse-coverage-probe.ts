@@ -9,7 +9,7 @@ if (
   items.some((item) => !/^\d+$/u.test(item))
 ) {
   console.error(
-    'Usage: npm run probe:warehouse-coverage -- YOUR_WAREHOUSE_NUMBER YOUR_ITEM_NUMBER [YOUR_ITEM_NUMBER ...]',
+    'Usage: npm run probe:warehouse-coverage -- YOUR_WAREHOUSE_NUMBER YOUR_FIRST_ITEM_NUMBER YOUR_SECOND_ITEM_NUMBER',
   );
   process.exit(64);
 }
