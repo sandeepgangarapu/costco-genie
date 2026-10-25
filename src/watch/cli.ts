@@ -9,6 +9,7 @@ import { check, type CheckResult, type SourceFetcher } from './check.js';
 import { kindsFor, type Channel, type WatchItem } from './domain.js';
 import { money, priceKindLabel, type MailSender } from './email.js';
 import { Store } from './store.js';
+import { formatPromoEnd } from '../lib/dates.js';
 
 export interface WatchDependencies {
   paths: AppPaths;
@@ -107,8 +108,14 @@ export async function runWatchCli(
           for (const kind of kindsFor(item.channel)) {
             const current = history.find((o) => o.kind === kind);
             const low = store.low(item.id, kind);
+            if (current && isNonErrorSkip(current.reason)) {
+              lines.push(
+                `  ${priceKindLabel(kind, current.evidence)}: ${reasonLabel(current.reason)}; checked ${current.observedAt}`,
+              );
+              continue;
+            }
             lines.push(
-              `  ${priceKindLabel(kind, current?.evidence)}: current ${money(current?.cents ?? null, current?.evidence.unitBasis)}${kind === 'warehouse_estimate' ? ` Same-Day; ${money(current?.estimateCents ?? null)} estimated warehouse` : ''}; low ${money(low?.lowCents ?? null, low?.unitBasis)}; checked ${current?.observedAt ?? 'never'}${current?.reason ? ` (${reasonLabel(current.reason)})` : ''}${current?.promoEnd ? ` | promo ends ${current.promoEnd}` : ''}${current?.evidence.unverifiedReason ? ` | unverified — check before buying: ${current.evidence.unverifiedReason}` : ''}`,
+              `  ${priceKindLabel(kind, current?.evidence)}: current ${money(current?.cents ?? null, current?.evidence.unitBasis)}${kind === 'warehouse_estimate' ? ` Same-Day; ${money(current?.estimateCents ?? null)} estimated warehouse` : ''}; low ${money(low?.lowCents ?? null, low?.unitBasis)}; checked ${current?.observedAt ?? 'never'}${current?.reason ? ` (${reasonLabel(current.reason)})` : ''}${current?.promoEnd ? ` | promo ends ${formatPromoEnd(current.promoEnd)}` : ''}${current?.evidence.unverifiedReason ? ` | unverified — check before buying: ${current.evidence.unverifiedReason}` : ''}`,
             );
           }
         }
@@ -144,17 +151,16 @@ export async function runWatchCli(
           itemNumber: catalog.itemNumber,
           name: String(
             values.name ??
-              catalog.name ??
-              existing?.name ??
-              `Item ${catalog.itemNumber}`,
+              (existing?.name.trim() &&
+              existing.name !== `Item ${catalog.itemNumber}`
+                ? existing.name
+                : null) ??
+              (catalog.name?.trim() || `Item ${catalog.itemNumber}`),
           ),
           url: catalog.url,
           channel: (values.channel ?? 'both') as Channel,
           addedAt: deps.now().toISOString(),
         });
-        lines.push(
-          `Watching ${item.itemNumber}: ${item.name} (${item.channel}).`,
-        );
         if (!values['no-check']) {
           const result = await check(
             store,
@@ -165,6 +171,7 @@ export async function runWatchCli(
             deps.now,
           );
           lines.push(
+            watchingLabel(store.find(item.itemNumber)!),
             formatCheck(result, store.items()),
             'Baseline recorded where usable; no email is sent when adding.',
           );
@@ -173,7 +180,7 @@ export async function runWatchCli(
             text: lines.join('\n'),
           };
         }
-        return { code: 0, text: lines.join('\n') };
+        return { code: 0, text: watchingLabel(item) };
       }
       const result = await check(
         store,
@@ -199,16 +206,38 @@ export async function runWatchCli(
     ? execute()
     : deps.lock.runExclusive(execute);
 }
+const skipLabels: Record<string, string> = {
+  skipped_verified_warehouse_price: 'not needed (verified warehouse price)',
+  warehouse_only: 'not applicable (warehouse only)',
+  not_online_buyable: 'not available online',
+  warehouse_not_configured: 'not configured (warehouse)',
+  same_day_location_or_markup_not_configured:
+    'not configured (Same-Day location or markup)',
+};
+function isNonErrorSkip(reason: string | null | undefined): reason is string {
+  return (
+    !!reason &&
+    (Object.hasOwn(skipLabels, reason) || reason.startsWith('skipped_'))
+  );
+}
 export function reasonLabel(reason: string): string {
-  return reason === 'skipped_verified_warehouse_price'
-    ? 'not needed (verified warehouse price)'
-    : reason;
+  return (
+    skipLabels[reason] ??
+    (reason.startsWith('skipped_')
+      ? `skipped (${reason.slice(8).replaceAll('_', ' ')})`
+      : reason)
+  );
+}
+function watchingLabel(item: WatchItem): string {
+  return `Watching ${item.itemNumber}: ${item.name} (${item.channel}).`;
 }
 function formatObservation(
   o: import('./domain.js').Observation,
   items: WatchItem[],
 ): string {
-  return `${o.observedAt} | ${items.find((i) => i.id === o.itemId)?.itemNumber ?? o.itemId} | ${priceKindLabel(o.kind, o.evidence)} | ${money(o.cents, o.evidence.unitBasis)}${o.kind === 'warehouse_estimate' ? ` Same-Day; ${money(o.estimateCents)} estimated warehouse` : ''} | ${o.reason ? reasonLabel(o.reason) : o.source}${o.promoEnd ? ` | promo ends ${o.promoEnd}` : ''}${(o.evidence.unverifiedReason ?? o.evidence.conflictReason) ? ` | unverified — check before buying: ${o.evidence.unverifiedReason ?? o.evidence.conflictReason}` : ''}`;
+  const prefix = `${o.observedAt} | ${items.find((i) => i.id === o.itemId)?.itemNumber ?? o.itemId} | ${priceKindLabel(o.kind, o.evidence)}`;
+  if (isNonErrorSkip(o.reason)) return `${prefix}: ${reasonLabel(o.reason)}`;
+  return `${prefix} | ${money(o.cents, o.evidence.unitBasis)}${o.kind === 'warehouse_estimate' ? ` Same-Day; ${money(o.estimateCents)} estimated warehouse` : ''} | ${o.reason ? reasonLabel(o.reason) : o.source}${o.promoEnd ? ` | promo ends ${formatPromoEnd(o.promoEnd)}` : ''}${(o.evidence.unverifiedReason ?? o.evidence.conflictReason) ? ` | unverified — check before buying: ${o.evidence.unverifiedReason ?? o.evidence.conflictReason}` : ''}`;
 }
 export function formatCheck(result: CheckResult, items: WatchItem[]): string {
   return [

@@ -103,6 +103,15 @@ describe('runCli', () => {
       expect(exitCode).toBe(0);
       expect(harness.calls).toEqual([]);
       expect(harness.output.join('\n')).toContain('costco <command>');
+      expect(harness.output.join('\n')).toContain(
+        'Receipt runs require ./costco login.',
+      );
+      expect(harness.output.join('\n')).toContain(
+        'Watch checks use public sources',
+      );
+      expect(harness.output.join('\n')).toContain(
+        'member-gated Costco.com prices need the signed-in session',
+      );
       for (const command of [
         'setup',
         'login',

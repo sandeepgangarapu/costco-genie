@@ -99,6 +99,28 @@ function decode(value: string): string {
     .replaceAll('&quot;', '"')
     .replaceAll('&#39;', "'");
 }
+export function catalogProductName(product: {
+  name?: unknown;
+  productName?: unknown;
+  description?: unknown;
+}): string | null {
+  const description = product.description;
+  const shortDescription =
+    description &&
+    typeof description === 'object' &&
+    'shortDescription' in description
+      ? description.shortDescription
+      : null;
+  for (const value of [
+    product.name,
+    product.productName,
+    description,
+    shortDescription,
+  ]) {
+    if (typeof value === 'string' && value.trim()) return decode(value.trim());
+  }
+  return null;
+}
 export function parseProductPage(
   html: string,
   url: string,
@@ -143,12 +165,7 @@ export function parseProductPage(
     ?.replace(/\s*\|\s*Costco.*$/iu, '');
   return {
     itemNumber,
-    name:
-      typeof name === 'string'
-        ? decode(name)
-        : title
-          ? decode(title.trim())
-          : null,
+    name: catalogProductName({ name, description: title }),
     url,
   };
 }

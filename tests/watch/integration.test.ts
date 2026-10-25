@@ -42,9 +42,10 @@ const home = () => {
   dirs.push(d);
   return d;
 };
-afterEach(() =>
-  dirs.splice(0).forEach((d) => rmSync(d, { recursive: true, force: true })),
-);
+afterEach(() => {
+  dirs.splice(0).forEach((d) => rmSync(d, { recursive: true, force: true }));
+  vi.unstubAllEnvs();
+});
 const now = () => new Date('2026-10-24T16:00:00Z');
 const report: RunSummary = {
   startedAt: now().toISOString(),
@@ -316,6 +317,188 @@ describe('watch CLI and session lifecycle', () => {
       })),
     };
   }
+  it.each(['warehouse', 'online', 'both'] as const)(
+    'uses already-fetched catalog names for %s adds and list output',
+    async (channel) => {
+      const fetchFn = vi.fn(async () =>
+        Response.json({
+          data: {
+            products: {
+              catalogData: [
+                {
+                  itemNumber: item.itemNumber,
+                  programTypes: 'WH',
+                  description: { shortDescription: 'TEST-Catalog butter' },
+                  priceData: { price: '14.99' },
+                },
+              ],
+            },
+          },
+        }),
+      );
+      const deps = {
+        ...dependencies(),
+        config,
+        resolveProduct: async () => ({
+          itemNumber: item.itemNumber,
+          name: null,
+          url: item.url,
+        }),
+        sources: makeSources(config, {
+          ...sourceOptions(),
+          warehouseGraphql: undefined,
+          fetchFn,
+          api: async (numbers) =>
+            new Map(
+              numbers.map((n) => [
+                n,
+                {
+                  cents: 1499,
+                  reason: null,
+                  memberOnly: false,
+                  name: 'TEST-Catalog butter',
+                  url: null,
+                },
+              ]),
+            ),
+        }),
+      };
+      const added = await runWatchCli(
+        ['add', item.itemNumber, '--channel', channel],
+        deps,
+      );
+      expect(added.code).toBe(0);
+      expect(added.text).toContain(
+        `Watching 123456: TEST-Catalog butter (${channel}).`,
+      );
+      expect((await runWatchCli(['list'], deps)).text).toContain(
+        `123456 | TEST-Catalog butter | ${channel}`,
+      );
+      expect(fetchFn).toHaveBeenCalledTimes(channel === 'online' ? 0 : 1);
+      expect(deps.mail).not.toHaveBeenCalled();
+    },
+  );
+  it('retains URL names, lets --name override catalog metadata, and preserves custom names on re-add', async () => {
+    const deps = {
+      ...dependencies(),
+      sources: async () => ({
+        observations: [observation(1000)],
+        productNames: new Map([[item.id, 'TEST-Catalog name']]),
+        session: 'not_required' as const,
+        diagnostics: [],
+      }),
+    };
+    const urlAdded = await runWatchCli(
+      ['add', item.url, '--channel', 'online', '--no-check'],
+      deps,
+    );
+    expect(urlAdded.text).toContain('Watching 123456: TEST-product (online).');
+    const custom = await runWatchCli(
+      [
+        'add',
+        item.itemNumber,
+        '--channel',
+        'online',
+        '--name',
+        'TEST-Custom name',
+      ],
+      deps,
+    );
+    expect(custom.text).toContain(
+      'Watching 123456: TEST-Custom name (online).',
+    );
+    await runWatchCli(['add', item.url, '--channel', 'online'], deps);
+    expect((await runWatchCli(['list'], deps)).text).toContain(
+      '123456 | TEST-Custom name | online',
+    );
+  });
+  it('keeps the numeric fallback when names are unavailable', async () => {
+    const deps = {
+      ...dependencies(),
+      resolveProduct: async () => ({
+        itemNumber: item.itemNumber,
+        name: null,
+        url: item.url,
+      }),
+    };
+    const added = await runWatchCli(
+      ['add', item.itemNumber, '--channel', 'online'],
+      deps,
+    );
+    expect(added.text).toContain('Watching 123456: Item 123456 (online).');
+  });
+  it.each([
+    [
+      'skipped_verified_warehouse_price',
+      'not needed (verified warehouse price)',
+    ],
+    [
+      'same_day_location_or_markup_not_configured',
+      'not configured (Same-Day location or markup)',
+    ],
+    ['skipped_not_applicable', 'skipped (not applicable)'],
+  ])(
+    'renders non-error skip %s compactly in add, check, list, and history',
+    async (reason, label) => {
+      const deps = {
+        ...dependencies(),
+        sources: async () => ({
+          observations: [
+            observation(1000, { kind: 'warehouse' }),
+            observation(null, { kind: 'warehouse_estimate', reason }),
+          ],
+          session: 'not_required' as const,
+          diagnostics: [],
+        }),
+      };
+      for (const args of [
+        ['add', item.itemNumber, '--channel', 'warehouse'],
+        ['check'],
+        ['list'],
+        ['history', item.itemNumber],
+      ]) {
+        const { text } = await runWatchCli(args, deps);
+        const line = text
+          .split('\n')
+          .find((line) => line.includes('Warehouse estimate (Same-Day)'))!;
+        expect(line).toContain(`Warehouse estimate (Same-Day): ${label}`);
+        expect(line).toContain(now().toISOString().slice(0, 19));
+        expect(line).not.toMatch(/unavailable|low |estimated warehouse/u);
+      }
+    },
+  );
+  it.each(['2026-11-15', '2026-11-15T08:00:00.000Z', '11/15/2026'])(
+    'displays promo date %s consistently in add, check, list, and history while preserving storage',
+    async (promoEnd) => {
+      vi.stubEnv('TZ', 'America/Los_Angeles');
+      const deps = {
+        ...dependencies(),
+        sources: async () => ({
+          observations: [observation(1000, { promoEnd })],
+          session: 'not_required' as const,
+          diagnostics: [],
+        }),
+      };
+      for (const args of [
+        ['add', item.itemNumber, '--channel', 'online'],
+        ['check'],
+        ['list'],
+        ['history', item.itemNumber],
+      ]) {
+        const { text } = await runWatchCli(args, deps);
+        expect(text).toContain('promo ends 2026-11-15');
+        expect(text).not.toContain('2026-11-15T08:00');
+      }
+      const store = new Store(deps.paths.databaseFile, true);
+      try {
+        expect(
+          store.history(item.id).every((o) => o.promoEnd === promoEnd),
+        ).toBe(true);
+      } finally {
+        store.close();
+      }
+    },
+  );
   it('defaults to both with --no-check, silently baselines an online add, lists history, and removes without deleting history', async () => {
     const deps = dependencies();
     await runWatchCli(['add', item.itemNumber, '--no-check'], deps);

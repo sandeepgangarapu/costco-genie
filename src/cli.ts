@@ -51,8 +51,9 @@ Setup (asks optional questions in an interactive terminal):
   ./costco setup --watch-warehouse YOUR_WAREHOUSE
 
 Settings are saved outside the repository in ~/.costco-genie/config.json.
-Live checks require ./costco login: sign in to Costco in the dedicated Chrome
-window, complete MFA/CAPTCHA yourself, then close that window before running.
+Receipt runs require ./costco login. Watch checks use public sources; only
+member-gated Costco.com prices need the signed-in session. Sign in yourself in
+the dedicated Chrome window, complete MFA/CAPTCHA, then close that window.
 `;
 
 export interface CliIo {
@@ -83,7 +84,7 @@ export async function runCli(
           `Setup complete. Configuration: ${await actions.setup(parseSetupOptions(options))}`,
         );
         io.log(
-          'Next: run `./costco login`, sign in to Costco, then close the dedicated Chrome window.',
+          'For receipt runs or member-gated Costco.com watch prices: run `./costco login`, sign in yourself, then close the dedicated Chrome window.',
         );
         io.log(
           'Run `./costco run` for your first check. Open ~/.costco-genie/reports/latest.html to see the report.',

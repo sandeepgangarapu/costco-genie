@@ -106,6 +106,15 @@ export class Store {
       return true;
     });
   }
+  fillName(item: WatchItem, name: string): boolean {
+    return (
+      this.db
+        .prepare(
+          "UPDATE watch_items SET name=? WHERE id=? AND (trim(name)='' OR name=?)",
+        )
+        .run(name, item.id, `Item ${item.itemNumber}`).changes > 0
+    );
+  }
   low(itemId: number, kind: PriceKind): Low | undefined {
     if (!this.hasSchema) return undefined;
     return this.db

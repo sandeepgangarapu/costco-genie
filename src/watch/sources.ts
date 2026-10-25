@@ -35,7 +35,7 @@ import {
   type BrowserProduct,
   type BrowserResult,
 } from '../costco/browser-session.js';
-import { fetchProductHtml } from '../costco/product.js';
+import { fetchProductHtml, parseProductPage } from '../costco/product.js';
 import {
   parseDisplayedPrice,
   type DisplayedPrice,
@@ -124,6 +124,7 @@ export function makeSources(
                     source: p.source,
                     observedAt: p.observedAt,
                     promotionText: null,
+                    productName: p.productName,
                     warehouseEvidence: p.warehouseEvidence,
                   },
                 ]),
@@ -170,6 +171,13 @@ export function makeSources(
       warehouseItems.length && config.watchWarehouseNumber
         ? await (options.savings ?? (() => fetchSavings(fetchFn)))()
         : null;
+    const productNames = new Map<number, string>();
+    for (const item of items) {
+      const name =
+        online.get(item.itemNumber)?.name?.trim() ||
+        warehouse.get(item.itemNumber)?.productName?.trim();
+      if (name) productNames.set(item.id, name);
+    }
     const publicPrices = new Map<string, DisplayedPrice>();
     let failedPublicPages = 0;
     for (const item of onlineItems) {
@@ -177,12 +185,19 @@ export function makeSources(
         const page = await (
           options.publicPage ?? ((url) => fetchProductHtml(url, fetchFn))
         )(item.url);
-        if (page)
+        if (page) {
           publicPrices.set(
             item.itemNumber,
             parseDisplayedPrice(bodyText(page.html), item.itemNumber, page.url),
           );
-        else failedPublicPages += 1;
+          const product = parseProductPage(page.html, page.url);
+          if (
+            product?.itemNumber === item.itemNumber &&
+            product.name?.trim() &&
+            !productNames.has(item.id)
+          )
+            productNames.set(item.id, product.name.trim());
+        } else failedPublicPages += 1;
       } catch {
         failedPublicPages += 1;
       }
@@ -307,7 +322,7 @@ export function makeSources(
       .filter((i) => !verifiedWarehouse.has(i.id))
       .map((i) => ({
         itemNumber: i.itemNumber,
-        description: online.get(i.itemNumber)?.name ?? i.name,
+        description: productNames.get(i.id) ?? i.name,
         warehouseNumber: config.watchWarehouseNumber ?? '',
       }));
     const lookupSameDay = (requests: SameDayPriceRequest[]) =>
@@ -421,6 +436,6 @@ export function makeSources(
         observations.push(o);
       }
     }
-    return { observations, session, diagnostics };
+    return { observations, session, diagnostics, productNames };
   };
 }

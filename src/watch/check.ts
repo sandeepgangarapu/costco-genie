@@ -102,6 +102,12 @@ export async function check(
     failed = items.length > 0 && !source.observations.some(usable);
     stage = 'record observations and evaluate lows';
     store.transaction(() => {
+      if (!options.dryRun) {
+        for (const item of items) {
+          const name = source.productNames?.get(item.id)?.trim();
+          if (name && store.fillName(item, name)) item.name = name;
+        }
+      }
       for (const o of source.observations) {
         const old = store.low(o.itemId, o.kind);
         const evaluated = evaluateLow(old, o, config.minimumDropCents);

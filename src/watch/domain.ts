@@ -45,6 +45,7 @@ export interface Drop {
 }
 
 export interface SourceResult {
+  productNames?: ReadonlyMap<number, string>;
   observations: Observation[];
   session:
     | 'authenticated'

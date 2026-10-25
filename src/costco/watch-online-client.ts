@@ -1,6 +1,6 @@
 // Adapted from costco-genie/src/costco/price-client.ts (public GraphQL).
 import { z } from 'zod';
-import { wireCents } from './product.js';
+import { catalogProductName, wireCents } from './product.js';
 
 export const PRODUCT_ENDPOINT =
   'https://ecom-api.costco.com/ebusiness/product/v1/products/graphql';
@@ -91,13 +91,7 @@ export function parseApiPrices(
                   : null,
       memberOnly: product?.memberOnly === true,
       warehouseOnly,
-      name:
-        product?.name ??
-        product?.productName ??
-        (typeof product?.description === 'string'
-          ? product.description
-          : product?.description?.shortDescription) ??
-        null,
+      name: product ? catalogProductName(product) : null,
       url: product?.productUrl ?? null,
     });
   }

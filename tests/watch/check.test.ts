@@ -25,6 +25,45 @@ const result = (
 });
 const clock = () => new Date('2026-10-24T16:00:00Z');
 describe('lowest usable price since addition', () => {
+  it.each(['', 'Item 123456', 'TEST-My custom name'])(
+    'fills missing names (%j) without resetting any existing lows or overriding custom names',
+    async (name) => {
+      const s = makeStore();
+      s.add({ ...item, name, channel: 'both' });
+      const lows = ['online', 'warehouse', 'warehouse_estimate'].map(
+        (kind) => ({
+          itemId: item.id,
+          kind: kind as 'online' | 'warehouse' | 'warehouse_estimate',
+          baselineCents: 1200,
+          lowCents: 1000,
+        }),
+      );
+      lows.forEach((low) => s.saveLow(low));
+      const before = lows.map((low) => s.low(item.id, low.kind));
+      const mail = vi.fn(async () => {});
+      const source: SourceResult = {
+        observations: lows.map((low) => observation(null, { kind: low.kind })),
+        productNames: new Map([[item.id, 'TEST-Catalog butter']]),
+        session: 'not_required',
+        diagnostics: [],
+      };
+      await check(
+        s,
+        DEFAULT_CONFIG,
+        async () => source,
+        mail,
+        { dryRun: true },
+        clock,
+      );
+      expect(s.items()[0].name).toBe(name);
+      await check(s, DEFAULT_CONFIG, async () => source, mail, {}, clock);
+      expect(s.items()[0].name).toBe(
+        name.startsWith('TEST-') ? name : 'TEST-Catalog butter',
+      );
+      expect(lows.map((low) => s.low(item.id, low.kind))).toEqual(before);
+      expect(mail).not.toHaveBeenCalled();
+    },
+  );
   it('baselines, ignores equals and rebounds, and alerts only on a further low', async () => {
     const s = makeStore();
     const mail = vi.fn(async () => {});

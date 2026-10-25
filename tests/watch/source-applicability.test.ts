@@ -28,6 +28,26 @@ const offline = (options: SourceOptions = {}): SourceOptions => ({
 });
 
 describe('source applicability and profile isolation', () => {
+  it.each([true, false])(
+    'fills names from already-fetched pages only for matching item identity (%s)',
+    async (matches) => {
+      const publicPage = vi.fn(async () => ({
+        html: `<title>TEST-Page butter | Costco</title><div>Item ${matches ? item.itemNumber : '777777'}</div>`,
+        url: item.url,
+      }));
+      const source = await makeSources(
+        DEFAULT_CONFIG,
+        offline({
+          api: async () => new Map(),
+          publicPage,
+        }),
+      )([item]);
+      expect(source.productNames?.get(item.id)).toBe(
+        matches ? 'TEST-Page butter' : undefined,
+      );
+      expect(publicPage).toHaveBeenCalledOnce();
+    },
+  );
   it.each([false, true])(
     'ignores all prices for warehouse-only products (API metadata: %s)',
     async (apiOnly) => {

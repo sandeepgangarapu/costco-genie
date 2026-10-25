@@ -1,4 +1,5 @@
 import type { WarehousePriceEvidence } from '../domain/types.js';
+import { formatPromoEnd } from '../lib/dates.js';
 
 export function warehouseSourceLabel(source: string): string {
   return (
@@ -31,7 +32,7 @@ export function warehouseEvidenceDetails(price: {
     ...(e.unitReason || e.conflictReason
       ? amount('Quotation for review', e.quotationCents)
       : []),
-    ...(e.promoEnd ? [`Promotion ends: ${e.promoEnd}`] : []),
+    ...(e.promoEnd ? [`Promotion ends: ${formatPromoEnd(e.promoEnd)}`] : []),
     `Unit: ${e.unitBasis}`,
     ...(e.comparisonBasis === 'assumed_package'
       ? ['Comparison: assumed package price (unit not stated)']

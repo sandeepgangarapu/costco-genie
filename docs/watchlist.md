@@ -15,7 +15,9 @@ Watch items you have not bought yet, independently of receipt adjustments.
 ./costco watch remove ITEM_NUMBER
 ```
 
-The default channel is `both`. A URL is resolved to its actual item number from product metadata or the displayed item number; a product ID is never assumed to be an item number. Ambiguous or inaccessible URLs fail with instructions to use the printed item number. Names and canonical links are retained when available. `--no-check` skips baseline lookup (a URL still needs identity resolution).
+The default channel is `both`. A URL is resolved to its actual item number from product metadata or the displayed item number; a product ID is never assumed to be an item number. Ambiguous or inaccessible URLs fail with instructions to use the printed item number. Catalog or page names are retained when available; `--name` overrides them. Placeholder names are filled in on later checks without resetting lows. `--no-check` skips baseline lookup (a URL still needs identity resolution).
+
+Watch checks use public sources. Only member-gated Costco.com prices need `./costco login`; receipt runs always need the signed-in session.
 
 Adding records available baselines and sends no email. If a price is unavailable, its first usable observation becomes its baseline. `watch list` shows the latest observation, stored alert low, and last checked time for each kind; the latest may be unavailable even if an older usable price exists. Removing stops checks and cancels queued alerts while retaining history. Re-adding a removed item starts a new watch period.
 

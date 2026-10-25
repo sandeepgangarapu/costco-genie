@@ -23,7 +23,7 @@ cd ~/costco-genie
 ./costco login
 ```
 
-Sign in yourself in the app's dedicated Chrome window, complete any MFA/CAPTCHA, then **close that window**. Your everyday Chrome session does not replace this login. Repeat `./costco login` when the session expires.
+Receipt runs require this login. Watch checks use public sources; only member-gated Costco.com prices need the signed-in session. Sign in yourself in the app's dedicated Chrome window, complete any MFA/CAPTCHA, then **close that window**. Your everyday Chrome session does not replace this login. Repeat `./costco login` when the session expires.
 
 Setup asks for optional Same-Day location and email settings; Enter keeps a value and `-` clears it. Warehouse watches need your warehouse number:
 

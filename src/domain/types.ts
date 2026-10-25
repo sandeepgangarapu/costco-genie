@@ -15,6 +15,7 @@ export interface Purchase {
 }
 
 export interface PriceObservation {
+  readonly productName?: string;
   readonly warehouseEvidence?: WarehousePriceEvidence;
   readonly itemNumber: string;
   readonly warehouseNumber: string;
@@ -34,6 +35,7 @@ export type PriceChannel =
   | 'same_day';
 
 export interface ReportPriceObservation {
+  readonly productName?: string;
   readonly warehouseEvidence?: WarehousePriceEvidence;
   readonly channel: PriceChannel;
   readonly unitPriceCents: number | null;

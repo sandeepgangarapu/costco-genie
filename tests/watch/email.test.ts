@@ -4,8 +4,26 @@ import { SmtpMailNotifier } from '../../src/notifications/smtp-mail.js';
 import { DEFAULT_CONFIG } from '../../src/config/config.js';
 import { watchMailSender, renderDrops } from '../../src/watch/email.js';
 import { item, observation } from './helpers.js';
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 describe('watch email uses matcher transports', () => {
+  it.each(['2026-11-15', '2026-11-15T08:00:00.000Z', '11/15/2026'])(
+    'formats promo end %s consistently in text and HTML without mutating evidence',
+    (promoEnd) => {
+      vi.stubEnv('TZ', 'America/Los_Angeles');
+      const o = observation(900, { promoEnd });
+      const message = renderDrops([
+        { item, observation: o, previousLowCents: 1000, baselineCents: 1200 },
+      ]);
+      expect(message.text).toContain('Promo ends: 2026-11-15\n');
+      expect(message.html).toContain('<td>2026-11-15</td>');
+      expect(message.text).not.toContain('T08:00');
+      expect(message.html).not.toContain('T08:00');
+      expect(o.promoEnd).toBe(promoEnd);
+    },
+  );
   const message = renderDrops([
     {
       item,

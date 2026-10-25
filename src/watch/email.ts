@@ -3,6 +3,7 @@ import type { Drop, Observation, PriceKind } from './domain.js';
 import type { AppConfig } from '../config/config.js';
 import { SmtpMailNotifier } from '../notifications/smtp-mail.js';
 import { AppleMailNotifier } from '../notifications/apple-mail.js';
+import { formatPromoEnd } from '../lib/dates.js';
 export interface Message {
   subject: string;
   text: string;
@@ -72,7 +73,7 @@ export function renderDrops(drops: Drop[]): Message {
         money(previousLowCents, o.evidence.unitBasis),
         money(baselineCents, o.evidence.unitBasis),
         money(previousLowCents - o.cents!, o.evidence.unitBasis),
-        o.promoEnd ?? 'Not shown',
+        o.promoEnd ? formatPromoEnd(o.promoEnd) : 'Not shown',
         o.source +
           (o.evidence.discountHandling
             ? `; ${o.evidence.discountHandling}`

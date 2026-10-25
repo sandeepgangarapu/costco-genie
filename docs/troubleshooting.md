@@ -9,9 +9,9 @@ cd ~/costco-genie
 
 A **separate Google Chrome window** opens. Sign in to Costco yourself and complete any MFA or CAPTCHA. Wait until you are signed in, then **close the dedicated Costco Chrome window** so the command can finish. You can keep your everyday Chrome windows open.
 
-The app keeps this session in `~/.costco-genie/browser-profile/` and reuses it for live checks. It does not ask for your password in Terminal. Treat this profile like any signed-in browser: do not share it or copy it into Git.
+The app keeps this session in `~/.costco-genie/browser-profile/` for receipt runs and member-gated Costco.com watch prices. Other watch sources are public and do not require sign-in. It does not ask for your password in Terminal. Treat this profile like any signed-in browser: do not share it or copy it into Git.
 
-**Each person must complete this step on their own Mac.** A session in another Chrome profile, an agent's browser, or a browser preview cannot replace the app's profile. When Costco expires the session, repeat `./costco login`.
+**Each person who needs sign-in must complete this step on their own Mac.** A session in another Chrome profile, an agent's browser, or a browser preview cannot replace the app's profile. When Costco expires the session, repeat `./costco login`.
 
 ## First receipt check
 

@@ -1,4 +1,5 @@
 import { PRODUCT_CLIENT_ID } from './public-storefront.js';
+import { catalogProductName } from './product.js';
 import { z } from 'zod';
 
 import type {
@@ -170,11 +171,13 @@ function mapProduct(
   }
 
   const product = catalogProductSchema.parse(rawProduct);
+  const productName = catalogProductName(product);
   const variableWeight = catalogVariableWeight(product);
-  const withMetadata = (price: PriceObservation): PriceObservation =>
-    variableWeight
+  const withMetadata = (price: PriceObservation): PriceObservation => ({
+    ...price,
+    ...(productName ? { productName } : {}),
+    ...(variableWeight
       ? {
-          ...price,
           warehouseEvidence: {
             warehouseNumber: indexed.request.warehouseNumber,
             unitBasis: 'each',
@@ -183,7 +186,8 @@ function mapProduct(
               'warehouse_catalog_variable_weight_not_comparable_to_receipt_package',
           },
         }
-      : price;
+      : {}),
+  });
   if (!hasWarehouseProgram(product.programTypes)) {
     return withMetadata(
       unresolved(indexed.request, observedAt, 'not_warehouse_price'),

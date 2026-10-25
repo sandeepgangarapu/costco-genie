@@ -57,6 +57,13 @@ describe('item identity and catalog', () => {
       async () => new Response(html),
     ) as unknown as typeof fetch;
     expect((await resolveProduct(item.url, fetchFn)).itemNumber).toBe('123456');
+    expect(
+      parseProductPage(
+        '<title>TEST-Title &amp; name | Costco</title>' +
+          html.replace('TEST-Name', '  '),
+        item.url,
+      )?.name,
+    ).toBe('TEST-Title & name');
     expect(parseProductPage('<p>No item number</p>', item.url)).toBeNull();
     expect(
       parseProductPage(html + '<div>Item 777777</div>', item.url),
