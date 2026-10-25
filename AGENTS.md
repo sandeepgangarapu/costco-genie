@@ -2,7 +2,7 @@
 
 ## Help someone set up the app
 
-This is a local macOS CLI. Read [README.md](README.md) first. It requires macOS, Google Chrome, Node.js 22.13.0+ with npm (or an existing NVM installation), and Apple Command Line Tools for native dependencies. Apple Mail with an enabled account is the default email transport; a private SMTP file is an alternative.
+This is a local macOS CLI for receipt adjustments and unpurchased-item watchlists. Read [README.md](README.md) first. It requires macOS, Google Chrome, Node.js 22.13.0+ with npm (or an existing NVM installation), and Apple Command Line Tools for native dependencies. Apple Mail with an enabled account is the default email transport; a private SMTP file is an alternative.
 
 1. Check prerequisites without printing environment variables or reading private account files.
 2. From this checkout, run `./costco setup --no-same-day` for noninteractive setup with no location. If the user has supplied their own location, use `./costco setup --zip YOUR_ZIP --address "YOUR_NEARBY_ADDRESS"`. Add `--email you@example.com` only with the user's chosen recipient. A user running `./costco setup` in Terminal gets an optional settings wizard. Never invent a location or reuse another person's settings.
@@ -10,7 +10,7 @@ This is a local macOS CLI. Read [README.md](README.md) first. It requires macOS,
 4. The application reuses its own persistent profile at `~/.costco-price-matcher/browser-profile/`. Do not copy cookies, tokens, saved passwords, browser caches, or other Chrome profiles into this checkout. Never ask for a Costco password, MFA code, session token, or cookie in chat. Do not bypass MFA or CAPTCHA.
 5. `./costco doctor` and `./costco status` are offline checks. Doctor confirms profile presence, **not** whether Costco authentication is valid. Setup does not log in. An unattended or headless environment cannot complete the initial interactive sign-in: report that prerequisite and leave the login step for the user.
 6. A live `./costco run` contacts Costco and can deliver email and local notifications. Run it only when the user has requested a live check or authorized it as part of setup. Review aggregate output; do not paste purchase data or reports into chat. The HTML report is `~/.costco-price-matcher/reports/latest.html`.
-7. Install automatic checks with `./costco install-agent` only if the user wants a schedule. Default: daily at 09:00 local time. This creates a per-user macOS LaunchAgent. Do not use sudo. Reinstall the agent after moving the checkout, changing Node, or changing the schedule.
+7. Install automatic checks with `./costco install-agent` only if the user wants a schedule. One agent: daily watches at 08:00 plus the configured receipt schedule (daily 09:00 by default). Preserve receipt weekday and freshness settings. This creates a per-user macOS LaunchAgent. Do not use sudo. Reinstall the agent after moving the checkout, changing Node, or changing the schedule.
 
 When Costco authentication expires, repeat `./costco login`; never substitute a stored password or an automated login script. Close the dedicated login window before running a check to avoid a profile lock.
 
@@ -30,4 +30,28 @@ When Costco authentication expires, repeat `./costco login`; never substitute a 
 - `./costco help` selects Node through NVM when available, runs `npm ci` if the runtime or lockfile changed, and builds. It does not log in, check Costco, or send email. For direct npm commands, first select a supported Node with matching native dependencies.
 - Run `npm test`, `npm run typecheck`, `npm run lint`, `npm run format:check`, and `npm run build` after behavior changes. Keep tests offline: inject the browser, network, notification, mail, and scheduling boundaries. Never run a live Costco check or probe as a substitute for tests.
 - Preserve owner-only filesystem permissions and symlink protection. Preserve existing local settings when rerunning setup. Keep warehouse prices, Costco.com prices, and Same-Day estimates separate; an estimate is not a verified warehouse price or an approved adjustment.
-- `docs/superpowers/` contains historical design notes. The current code and README describe the shipped setup and browser session behavior.
+- `docs/superpowers/` contains historical design notes. The current code and focused docs below describe shipped behavior. Do not modify historical notes as part of routine changes.
+
+## Watchlist development
+
+- Commands are `./costco watch add|list|remove|history|check`; numeric `add --no-check` is offline, while URLs still need identity resolution. Live watch adds/checks contact Costco and may deliver mail (checks only), so require explicit live authorization. Keep verification offline with injected boundaries.
+- Watch data uses additive `watch_*` tables in the existing `costco.sqlite`. Preserve receipt data and test migration from the current schema. No sibling checkout/data/LaunchAgent is needed by the merged app.
+- Reuse matcher warehouse display, savings reconciliation, Same-Day client, mail transports, and `run.lock`. Never introduce a duplicate warehouse client. Keep online, verified warehouse, and raw Same-Day lows separate. Watch rate comparisons require matching unit basis; receipt package safeguards remain unchanged.
+- `watchWarehouseNumber` defaults to null; never hardcode an owner's warehouse. Watch schedule defaults to 08:00; thresholds and schedules are validated. Baselines are silent, sub-threshold drops accumulate, implausible/conflicting drops remain unverified, and failed mail stays queued.
+- Scheduled dispatch checks watches and receipts independently and sequentially under the shared lock. Every profile lifecycle, including watch member-price fallback, must finish before releasing that lock. Only explicit member gates may open the signed-in watch fallback. Dry-run must not write configuration/database/notice state or deliver mail.
+
+## Documentation map
+
+Keep README concise and human-facing. Agent/implementation details belong one level down:
+
+- [Configuration](docs/configuration.md): every setting/default and setup behavior.
+- [Price sources](docs/price-sources.md): source precedence, endpoint facts, coupons, units, estimates, and coverage limits.
+- [Watchlist](docs/watchlist.md): commands, baselines, new-low rules, plausibility and notices.
+- [Scheduling](docs/scheduling.md): one LaunchAgent, independent dispatch, freshness and catch-up.
+- [Email](docs/email.md): Apple Mail, SMTP file setup, and retry semantics.
+- [Troubleshooting](docs/troubleshooting.md): login, setup, diagnostic and recovery details.
+- [Development](docs/development.md): offline gates, storage migration, private data and probes.
+
+## Maintainer workflow
+
+This section applies only to the maintainer's own sessions; other users' agents should ignore it. When the maintainer orchestrates from T3 Code, the orchestrator plans, reviews, and performs account-touching or outward steps. It delegates most implementation and review to **GPT-6.1** subagents at **Extra High** reasoning through T3 `delegate_task`, with `providerInstanceId: "codex"`, `model: "gpt-6.1-sol"`, and `options: { reasoningEffort: "xhigh" }`. Implementation subagents keep live checks, mail, LaunchAgent installation, pushes, and merging with the orchestrator.
