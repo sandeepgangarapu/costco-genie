@@ -4,6 +4,7 @@ import { stdin, stdout } from 'node:process';
 import { parseConfig, type AppConfig } from '../config/config.js';
 
 export interface SetupOptions {
+  watchWarehouseNumber?: AppConfig['watchWarehouseNumber'];
   sameDayPostalCode?: AppConfig['sameDayPostalCode'];
   sameDayRepresentativeAddress?: AppConfig['sameDayRepresentativeAddress'];
   emailRecipient?: AppConfig['emailRecipient'];
@@ -23,7 +24,12 @@ export function parseSetupOptions(
       options.sameDayRepresentativeAddress = null;
       continue;
     }
-    if (flag !== '--zip' && flag !== '--address' && flag !== '--email') {
+    if (
+      flag !== '--zip' &&
+      flag !== '--address' &&
+      flag !== '--email' &&
+      flag !== '--watch-warehouse'
+    ) {
       throw new SetupUsageError(
         `Unknown setup option: ${flag}. Run ./costco help for examples.`,
       );
@@ -34,6 +40,9 @@ export function parseSetupOptions(
     }
     index += 1;
     switch (flag) {
+      case '--watch-warehouse':
+        options.watchWarehouseNumber = value === '-' ? null : value.trim();
+        break;
       case '--zip':
         options.sameDayPostalCode = value.trim();
         break;
@@ -54,7 +63,7 @@ function validateSetupOptions(options: SetupOptions): void {
     parseConfig(options);
   } catch {
     throw new SetupUsageError(
-      'Use a five-digit ZIP, a nonempty address, and a valid email address (or --email - to use your mail provider’s default).',
+      'Use a physical watch warehouse number, a five-digit ZIP, a nonempty address, and a valid email address (or --email - to use your mail provider’s default).',
     );
   }
 }

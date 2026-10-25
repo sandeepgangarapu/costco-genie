@@ -1,4 +1,5 @@
 import Sqlite from 'better-sqlite3';
+import { initializeWatchSchema } from '../watch/store.js';
 
 import type {
   NotificationResults,
@@ -166,6 +167,7 @@ export class Database {
       CREATE INDEX IF NOT EXISTS runs_success_idx
         ON runs (outcome, finished_at DESC);
     `);
+    initializeWatchSchema(this.sqlite);
     this.ensureColumn('price_observations', 'evidence_json', 'TEXT');
     this.observationEvidenceSelection = 'evidence_json';
     this.ensureColumn('purchases', 'description', 'TEXT');

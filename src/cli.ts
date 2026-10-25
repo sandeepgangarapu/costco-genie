@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { WatchUsageError } from './watch/cli.js';
 
 import { realpathSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -30,6 +31,11 @@ Commands:
   setup             Create local configuration and data storage
   login             Open the dedicated Chrome profile for manual Costco login
   run [--scheduled] Import receipts, check prices, and deliver new alerts
+  watch add <item|URL> [--channel online|warehouse|both] [--name TEXT] [--no-check]
+  watch list        Show watched items, current prices, and lows
+  watch remove <item>   Stop watching, retaining history
+  watch history <item>  Show price observations
+  watch check [--dry-run] [--item N]   Check for new lows
   status            Show data paths and the latest successful run
   install-agent     Install and load the configured macOS LaunchAgent
   uninstall-agent   Unload and remove the macOS LaunchAgent
@@ -40,6 +46,7 @@ Setup (asks optional questions in an interactive terminal):
   ./costco setup
   ./costco setup --zip YOUR_ZIP --address "YOUR_NEARBY_ADDRESS" --email you@example.com
   ./costco setup --no-same-day
+  ./costco setup --watch-warehouse YOUR_WAREHOUSE
 
 Settings are saved outside the repository in ~/.costco-price-matcher/config.json.
 Live checks require ./costco login: sign in to Costco in the dedicated Chrome
@@ -87,16 +94,26 @@ export async function runCli(
           'Costco login window closed. Run `costco doctor` to check readiness.',
         );
         return 0;
+      case 'watch': {
+        if (!actions.watch) throw new Error('Watchlist actions unavailable');
+        const result = await actions.watch(options);
+        io.log(result.text);
+        return result.code;
+      }
       case 'run': {
         const scheduled = parseRunOptions(options);
         const summary = await actions.run({ scheduled });
+        if (summary.watchCheck) io.log(summary.watchCheck);
         io.log(formatRunSummary(summary));
         const diagnostic = formatRunDiagnostic(summary);
         if (diagnostic !== null) io.error(diagnostic);
         if (summary.outcome === 'auth_required') {
           io.log('Recovery: run `costco login`, then run the check again.');
         }
-        return runExitCode(summary.outcome);
+        return summary.watchFailed &&
+          ['success', 'skipped'].includes(summary.outcome)
+          ? 1
+          : runExitCode(summary.outcome);
       }
       case 'status':
         requireNoOptions(command, options);
@@ -123,7 +140,9 @@ export async function runCli(
     }
   } catch (error) {
     io.error(commandError(error));
-    return error instanceof CliUsageError || error instanceof SetupUsageError
+    return error instanceof CliUsageError ||
+      error instanceof SetupUsageError ||
+      error instanceof WatchUsageError
       ? 64
       : 1;
   }

@@ -6,6 +6,8 @@ import { chromium } from 'playwright';
 import type { AppPaths } from '../config/paths.js';
 import { chromeBinaryPath } from './chrome-path.js';
 import { AuthRequiredError } from './errors.js';
+import { parseItemInput } from './product.js';
+import { parseDisplayedPrice, type DisplayedPrice } from './online-page.js';
 
 const LOGIN_URL = 'https://www.costco.com/AccountHomeView';
 const ORDERS_URL = 'https://www.costco.com/myaccount/orders';
@@ -205,6 +207,7 @@ function launchCaptureChrome(
   profileDirectory: string,
   url: string,
   port: number,
+  headless = false,
 ): Promise<SpawnedChrome> {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -215,7 +218,13 @@ function launchCaptureChrome(
         '--remote-debugging-address=127.0.0.1',
         '--disable-background-mode',
         '--no-first-run',
-        '--new-window',
+        ...(headless
+          ? [
+              '--headless=new',
+              '--no-startup-window',
+              '--disable-session-crashed-bubble',
+            ]
+          : ['--new-window']),
         url,
       ],
       { stdio: 'ignore' },
@@ -231,7 +240,6 @@ function launchCaptureChrome(
               if (child.exitCode === null && child.signalCode === null) {
                 child.kill('SIGKILL');
               }
-              done();
             }, 2_000);
             timer.unref();
             child.once('exit', () => {
@@ -247,4 +255,149 @@ function launchCaptureChrome(
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+// Ported watch product parsing; the caller holds the matcher's run.lock for the entire lifecycle.
+export interface ProductSession {
+  read(url: string, itemNumber: string): Promise<DisplayedPrice>;
+  close(): Promise<void>;
+}
+export interface BrowserProduct {
+  itemNumber: string;
+  url: string;
+}
+export interface BrowserResult {
+  prices: Map<string, DisplayedPrice>;
+  diagnostic: string | null;
+}
+export async function readWatchProductPricesLocked(
+  paths: AppPaths,
+  items: readonly BrowserProduct[],
+  openSession: (
+    profile: string,
+  ) => Promise<ProductSession> = openProductSession,
+): Promise<BrowserResult> {
+  const prices = new Map<string, DisplayedPrice>();
+  if (!items.length) return { prices, diagnostic: null };
+  try {
+    const session = await openSession(paths.browserProfileDir);
+    let failed = 0;
+    try {
+      for (const item of items) {
+        try {
+          const parsed = parseItemInput(item.url);
+          if (!('url' in parsed))
+            throw new Error('Expected public product URL');
+          prices.set(
+            item.itemNumber,
+            await session.read(parsed.url, item.itemNumber),
+          );
+        } catch {
+          failed += 1;
+        }
+      }
+      return {
+        prices,
+        diagnostic: failed
+          ? 'Signed-in product page unavailable for ' + failed + ' item(s).'
+          : null,
+      };
+    } finally {
+      await session.close();
+    }
+  } catch {
+    return {
+      prices,
+      diagnostic:
+        'Signed-in product source unavailable; close the dedicated Chrome window and check the app profile.',
+    };
+  }
+}
+async function openProductSession(profile: string): Promise<ProductSession> {
+  const port = await allocateLoopbackPort();
+  const launched = await launchCaptureChrome(
+    profile,
+    'about:blank',
+    port,
+    true,
+  );
+  const terminate = () => launched.terminate();
+  try {
+    const deadline = Date.now() + 20_000;
+    let browser;
+    while (!browser) {
+      try {
+        browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, {
+          timeout: 2_000,
+        });
+      } catch {
+        if (Date.now() >= deadline) throw new Error('Chrome CDP unavailable');
+        await delay(250);
+      }
+    }
+    const context = browser.contexts()[0];
+    if (!context) throw new Error('Chrome context unavailable');
+    return {
+      async read(url, itemNumber) {
+        const page = await context.newPage();
+        let authRedirect = false;
+        try {
+          await page.route('**/*', async (route) => {
+            const request = route.request();
+            if (
+              request.isNavigationRequest() &&
+              request.frame() === page.mainFrame()
+            ) {
+              try {
+                parseItemInput(request.url());
+              } catch {
+                authRedirect = /logon|signin|login/iu.test(request.url());
+                await route.abort();
+                return;
+              }
+            }
+            await route.continue();
+          });
+          await page
+            .goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
+            .catch(() => undefined);
+          if (authRedirect)
+            return {
+              ...parseDisplayedPrice('', itemNumber),
+              session: 'signed_out',
+              memberGate: true,
+            };
+          await page.locator('body').waitFor({ timeout: 10_000 });
+          // Wait for client-rendered pricing, not merely the item heading.
+          const deadline = Date.now() + 15_000;
+          let text = '';
+          let result: DisplayedPrice;
+          do {
+            text = await page.locator('body').innerText({ timeout: 10_000 });
+            result = parseDisplayedPrice(text, itemNumber, page.url());
+            if (
+              result.cents !== null ||
+              result.warehouseOnly ||
+              result.session === 'signed_out' ||
+              /access denied|verify you are human|captcha/iu.test(text)
+            )
+              break;
+            await delay(500);
+          } while (Date.now() < deadline);
+          if (authRedirect) {
+            result.session = 'signed_out';
+            result.memberGate = true;
+            result.cents = null;
+          }
+          return result;
+        } finally {
+          await page.close();
+        }
+      },
+      close: terminate,
+    };
+  } catch (error) {
+    await terminate();
+    throw error;
+  }
 }

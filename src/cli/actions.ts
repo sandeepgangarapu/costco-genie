@@ -1,3 +1,13 @@
+import { runWatchCli, formatCheck } from '../watch/cli.js';
+import { check as checkWatchlist } from '../watch/check.js';
+import { Store } from '../watch/store.js';
+import { makeSources } from '../watch/sources.js';
+import { watchMailSender, type MailSender } from '../watch/email.js';
+import type { SourceFetcher } from '../watch/check.js';
+import {
+  dispatchScheduledChecks,
+  type ScheduledSummary,
+} from '../scheduler/dispatch.js';
 import {
   accessSync,
   constants as fsConstants,
@@ -32,7 +42,6 @@ import {
 } from '../costco/price-client.js';
 import { fetchOnlineOrderPurchases } from '../costco/online-order-client.js';
 import { fetchReceipts } from '../costco/receipt-client.js';
-import type { RunSummary } from '../domain/types.js';
 import { pathExistsWithoutFollowing } from '../lib/filesystem.js';
 import { FileRunLock } from '../lib/process.js';
 import { AppleMailNotifier } from '../notifications/apple-mail.js';
@@ -57,7 +66,10 @@ export interface CliActions {
   readonly login: () => Promise<void>;
   readonly run: (options: {
     readonly scheduled: boolean;
-  }) => Promise<RunSummary>;
+  }) => Promise<ScheduledSummary>;
+  readonly watch?: (
+    args: readonly string[],
+  ) => Promise<{ code: number; text: string }>;
   readonly setup: (options?: SetupOptions) => Promise<string>;
   readonly status: () => Promise<string>;
   readonly uninstallAgent: () => Promise<string>;
@@ -69,6 +81,8 @@ export interface DefaultCliActionOptions {
 }
 
 export interface DefaultCliDependencies {
+  readonly watchSources: (config: AppConfig, paths: AppPaths) => SourceFetcher;
+  readonly watchMail: (config: AppConfig) => MailSender;
   readonly promptSetup: (config: AppConfig) => Promise<SetupOptions>;
   readonly accessPath: (path: string, mode: number) => void;
   readonly compiledCliPath: string;
@@ -127,6 +141,8 @@ export function createDefaultCliActions(
           label: AGENT_LABEL,
           logDirectory: paths.logDir,
           nodePath: dependencies.nodePath,
+          watchScheduledHour: config.watchScheduledHour,
+          watchScheduledMinute: config.watchScheduledMinute,
           scheduledHour: config.scheduledHour,
           scheduledMinute: config.scheduledMinute,
           scheduledWeekday: config.scheduledWeekday,
@@ -140,31 +156,77 @@ export function createDefaultCliActions(
       loadConfig(paths);
       await dependencies.openLoginBrowser(paths);
     },
+    watch: async (args) => {
+      // A dry run reads configuration without chmod or creating directories.
+      const config =
+        args.includes('--dry-run') || ['list', 'history'].includes(args[0])
+          ? readConfigWithoutMutation(paths)
+          : loadConfig(paths);
+      return runWatchCli(args, {
+        paths,
+        config,
+        lock: dependencies.createLock(join(paths.dataDir, 'run.lock')),
+        sources: dependencies.watchSources(config, paths),
+        mail: dependencies.watchMail(config),
+        now: dependencies.now,
+      });
+    },
     run: async ({ scheduled }) => {
       const config = loadConfig(paths);
       const lock = dependencies.createLock(join(paths.dataDir, 'run.lock'));
-      return lock.runExclusive(async () => {
-        const database = dependencies.openDatabase(paths.databaseFile);
-        try {
-          return await runPriceCheckLocked(
-            {
-              config,
-              database,
-              fetchOnlineOrderPurchases: dependencies.fetchOnlineOrderPurchases,
-              fetchReceipts: dependencies.fetchReceipts,
-              fetchWarehousePrices: dependencies.fetchWarehousePrices,
-              fetchReportPriceEvidence: dependencies.fetchReportPriceEvidence,
-              localNotifier: dependencies.createLocalNotifier(),
-              mailNotifier: dependencies.createMailNotifier(config),
-              readCostcoTokens: () => dependencies.readCostcoTokens(paths),
-              writeFullReport: (report) => writeFullReport(paths, report),
-            },
-            { now: dependencies.now, scheduled },
-          );
-        } finally {
-          database.close();
-        }
-      });
+      const receipts = () =>
+        lock.runExclusive(async () => {
+          const database = dependencies.openDatabase(paths.databaseFile);
+          try {
+            return await runPriceCheckLocked(
+              {
+                config,
+                database,
+                fetchOnlineOrderPurchases:
+                  dependencies.fetchOnlineOrderPurchases,
+                fetchReceipts: dependencies.fetchReceipts,
+                fetchWarehousePrices: dependencies.fetchWarehousePrices,
+                fetchReportPriceEvidence: dependencies.fetchReportPriceEvidence,
+                localNotifier: dependencies.createLocalNotifier(),
+                mailNotifier: dependencies.createMailNotifier(config),
+                readCostcoTokens: () => dependencies.readCostcoTokens(paths),
+                writeFullReport: (report) => writeFullReport(paths, report),
+              },
+              { now: dependencies.now, scheduled },
+            );
+          } finally {
+            database.close();
+          }
+        });
+      if (!scheduled) return receipts();
+      return dispatchScheduledChecks(
+        () =>
+          lock.runExclusive(async () => {
+            const store = new Store(paths.databaseFile);
+            try {
+              if (!store.items().length)
+                return {
+                  status: 'skipped',
+                  text: 'Watchlist is empty; scheduled watch check skipped.',
+                };
+              const result = await checkWatchlist(
+                store,
+                config,
+                dependencies.watchSources(config, paths),
+                dependencies.watchMail(config),
+                { scheduled: true },
+                dependencies.now,
+              );
+              return {
+                status: result.status,
+                text: formatCheck(result, store.items()),
+              };
+            } finally {
+              store.close();
+            }
+          }),
+        receipts,
+      );
     },
     setup: async (options) => {
       const config = loadConfig(paths);
@@ -200,6 +262,7 @@ async function statusText(
   if (!dependencies.fileExists(paths.databaseFile)) {
     return [
       ...pathLines,
+      watchStatusText(paths, dependencies),
       'Application is not set up; run `costco setup`.',
     ].join('\n');
   }
@@ -209,6 +272,7 @@ async function statusText(
     const lastRun = database.getLastSuccessfulRun();
     return [
       ...pathLines,
+      watchStatusText(paths, dependencies),
       lastRun
         ? `Last successful run: ${lastRun.finishedAt} (${String(lastRun.candidatesFound)} potential, ${String(lastRun.unresolvedPrices)} unresolved)`
         : 'No successful run recorded.',
@@ -223,7 +287,7 @@ async function runDoctor(
   dependencies: DefaultCliDependencies,
 ): Promise<DoctorReport> {
   const config = readConfigWithoutMutation(paths);
-  return diagnoseEnvironment({
+  const report = await diagnoseEnvironment({
     checkBrowserProfile: () => {
       if (
         !dependencies.fileExists(paths.browserProfileDir) ||
@@ -318,10 +382,35 @@ async function runDoctor(
             }
           : { detail: 'Apple Mail is not installed', ok: false },
   });
+  try {
+    const detail = watchStatusText(paths, dependencies);
+    return {
+      ...report,
+      checks: [
+        ...report.checks,
+        { name: 'watchlist-and-schedules', ok: true, detail },
+      ],
+    };
+  } catch {
+    return {
+      ok: false,
+      checks: [
+        ...report.checks,
+        {
+          name: 'watchlist-and-schedules',
+          ok: false,
+          detail:
+            'Cannot read watchlist state; run setup and inspect local storage.',
+        },
+      ],
+    };
+  }
 }
 
 function defaultCliDependencies(): DefaultCliDependencies {
   return {
+    watchSources: (config, paths) => makeSources(config, {}, paths),
+    watchMail: watchMailSender,
     promptSetup: promptForSetup,
     accessPath: accessSync,
     compiledCliPath: compiledCliPath(),
@@ -375,4 +464,44 @@ function projectDirectory(): string {
 
 function compiledCliPath(): string {
   return resolve(projectDirectory(), 'dist', 'cli.js');
+}
+
+function watchStatusText(
+  paths: AppPaths,
+  dependencies: DefaultCliDependencies,
+): string {
+  const config = readConfigWithoutMutation(paths);
+  const time = (hour: number, minute: number) =>
+    String(hour).padStart(2, '0') + ':' + String(minute).padStart(2, '0');
+  const lines = [
+    'Watch schedule: daily ' +
+      time(config.watchScheduledHour, config.watchScheduledMinute) +
+      ' local',
+    'Receipt schedule: ' +
+      (config.scheduledWeekday === null
+        ? 'daily'
+        : 'weekday ' + config.scheduledWeekday) +
+      ' ' +
+      time(config.scheduledHour, config.scheduledMinute) +
+      ' local; freshness ' +
+      config.scheduledIntervalDays +
+      ' day(s)',
+    'Watch warehouse configured: ' + (config.watchWarehouseNumber !== null),
+  ];
+  if (dependencies.fileExists(paths.databaseFile)) {
+    const store = new Store(paths.databaseFile, true);
+    try {
+      lines.push(
+        'Watchlist active items: ' + store.items().length,
+        'Last successful watch check: ' +
+          (store.state('lastSuccessfulCheck') ?? 'never'),
+        'Scheduled watch failures: ' +
+          (store.state('scheduledFailures') ?? '0'),
+        'Pending watch alerts: ' + store.pending().length,
+      );
+    } finally {
+      store.close();
+    }
+  } else lines.push('Watchlist is not initialized.');
+  return lines.join('\n');
 }

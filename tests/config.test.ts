@@ -35,6 +35,10 @@ describe('loadConfig', () => {
     const paths = appPaths(createTemporaryHome());
 
     expect(loadConfig(paths)).toEqual({
+      watchWarehouseNumber: null,
+      watchScheduledHour: 8,
+      watchScheduledMinute: 0,
+      minimumDropCents: 1,
       adjustmentWindowDays: 30,
       daysToFetch: 35,
       emailEveryRun: false,

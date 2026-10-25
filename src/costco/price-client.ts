@@ -1003,7 +1003,16 @@ export function resolveWarehousePriceEvidence(
   display: ReportPriceObservation | undefined,
   savings: ReportPriceObservation | undefined,
   graphql: ReportPriceObservation | undefined,
+  comparison: 'receipt' | 'watchlist' = 'receipt',
 ): ReportPriceObservation {
+  // Watch lows compare rates with the same unit basis, without receipt package quantities.
+  const usableQuotation = (price: ReportPriceObservation): boolean =>
+    comparison === 'receipt'
+      ? usableReportPrice(price)
+      : price.unavailableReason === null &&
+        price.unitPriceCents !== null &&
+        Number.isSafeInteger(price.unitPriceCents) &&
+        price.unitPriceCents > 0;
   const d = display?.warehouseEvidence;
   const b = savings?.warehouseEvidence;
   const exactDisplay =
@@ -1018,12 +1027,10 @@ export function resolveWarehousePriceEvidence(
     (savings.unavailableReason === null ||
       savings.unavailableReason === 'final_price_not_listed');
   const delivered =
-    exactDisplay && usableReportPrice(display!)
-      ? display!.unitPriceCents
-      : null;
+    exactDisplay && usableQuotation(display!) ? display!.unitPriceCents : null;
   const final = currentBooklet ? savings!.unitPriceCents : null;
   const usableGraphql =
-    graphql?.channel === 'warehouse' && usableReportPrice(graphql);
+    graphql?.channel === 'warehouse' && usableQuotation(graphql);
   let selected =
     delivered !== null ? display : final !== null ? savings : graphql;
   let cents =
@@ -1033,7 +1040,9 @@ export function resolveWarehousePriceEvidence(
       ? d!.unitBasis
       : final !== null
         ? b!.unitBasis
-        : ('each' as const);
+        : comparison === 'watchlist'
+          ? ('unknown' as const)
+          : ('each' as const);
   let promoEnd = selected?.warehouseEvidence?.promoEnd ?? null;
   let handling =
     delivered !== null
@@ -1044,12 +1053,14 @@ export function resolveWarehousePriceEvidence(
   let conflict: string | null = null;
   if (delivered !== null && currentBooklet) {
     const discount = b!.advertisedDiscountCents;
-    if (
-      (final !== null || discount != null) &&
-      b!.unitBasis !== 'unknown' &&
-      d!.unitBasis !== 'unknown' &&
-      b!.unitBasis !== d!.unitBasis
-    ) {
+    const incompatibleUnit =
+      comparison === 'watchlist'
+        ? (b!.unitBasis !== 'unknown' && b!.unitBasis !== d!.unitBasis) ||
+          (d!.unitBasis === 'lb' && b!.unitBasis !== 'lb')
+        : b!.unitBasis !== 'unknown' &&
+          d!.unitBasis !== 'unknown' &&
+          b!.unitBasis !== d!.unitBasis;
+    if ((final !== null || discount != null) && incompatibleUnit) {
       conflict = 'warehouse_display_booklet_unit_conflict';
     } else if (
       d!.discountCents! > 0 &&
@@ -1095,18 +1106,20 @@ export function resolveWarehousePriceEvidence(
     indicatesVariableWeight(request.description ?? '');
   const bookletVariable = exactBooklet && b.variableWeight === true;
   const unitReason =
-    unitBasis === 'lb'
-      ? 'warehouse_per_lb_not_comparable_to_receipt_package'
-      : catalogVariable
-        ? 'warehouse_catalog_variable_weight_not_comparable_to_receipt_package'
-        : receiptVariable
-          ? 'warehouse_receipt_variable_weight_not_comparable_to_receipt_package'
-          : bookletVariable
-            ? 'warehouse_booklet_variable_weight_not_comparable_to_receipt_package'
-            : cents !== null &&
-                possibleWarehouseUnitMismatch(cents, request.paidUnitCents)
-              ? 'warehouse_possible_unit_mismatch'
-              : null;
+    comparison === 'watchlist'
+      ? null
+      : unitBasis === 'lb'
+        ? 'warehouse_per_lb_not_comparable_to_receipt_package'
+        : catalogVariable
+          ? 'warehouse_catalog_variable_weight_not_comparable_to_receipt_package'
+          : receiptVariable
+            ? 'warehouse_receipt_variable_weight_not_comparable_to_receipt_package'
+            : bookletVariable
+              ? 'warehouse_booklet_variable_weight_not_comparable_to_receipt_package'
+              : cents !== null &&
+                  possibleWarehouseUnitMismatch(cents, request.paidUnitCents)
+                ? 'warehouse_possible_unit_mismatch'
+                : null;
   let reason =
     conflict ??
     unitReason ??

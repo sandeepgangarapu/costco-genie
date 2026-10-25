@@ -24,6 +24,8 @@ export interface LaunchAgentRenderOptions {
   readonly label: string;
   readonly logDirectory: string;
   readonly nodePath: string;
+  readonly watchScheduledHour?: number;
+  readonly watchScheduledMinute?: number;
   readonly scheduledHour?: number;
   readonly scheduledMinute?: number;
   readonly scheduledWeekday?: number | null;
@@ -121,8 +123,9 @@ export function renderLaunchAgent(options: LaunchAgentRenderOptions): string {
   <key>WorkingDirectory</key>
   <string>${escapeXml(options.workingDirectory)}</string>
   <key>RunAtLoad</key>
-  <${weekday == null ? 'true' : 'false'}/>
+  <true/>
   <key>StartCalendarInterval</key>
+  <array>
   <dict>
 ${weekday == null ? '' : `    <key>Weekday</key>\n    <integer>${String(weekday)}</integer>\n`}
     <key>Hour</key>
@@ -130,6 +133,13 @@ ${weekday == null ? '' : `    <key>Weekday</key>\n    <integer>${String(weekday)
     <key>Minute</key>
     <integer>${String(minute)}</integer>
   </dict>
+  <dict>
+    <key>Hour</key>
+    <integer>${String(options.watchScheduledHour ?? 8)}</integer>
+    <key>Minute</key>
+    <integer>${String(options.watchScheduledMinute ?? 0)}</integer>
+  </dict>
+  </array>
   <key>StandardOutPath</key>
   <string>${escapeXml(stdoutPath)}</string>
   <key>StandardErrorPath</key>
@@ -267,6 +277,16 @@ function validateRenderOptions(options: LaunchAgentRenderOptions): void {
   if (!options.label.trim()) {
     throw new TypeError('label must not be empty');
   }
+  validateCalendarValue(
+    'watchScheduledHour',
+    options.watchScheduledHour ?? 8,
+    23,
+  );
+  validateCalendarValue(
+    'watchScheduledMinute',
+    options.watchScheduledMinute ?? 0,
+    59,
+  );
   validateCalendarValue('scheduledHour', options.scheduledHour ?? 9, 23);
   validateCalendarValue('scheduledMinute', options.scheduledMinute ?? 0, 59);
   if (options.scheduledWeekday != null) {

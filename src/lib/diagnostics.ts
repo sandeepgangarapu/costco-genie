@@ -1,3 +1,4 @@
+// Shared matcher diagnostics, including the checker's URL/cookie/mail-credential redaction.
 const CONTROL_OR_FORMAT = String.raw`[\p{Cc}\p{Cf}]*`;
 const AUTHORIZATION_KEY = interruptedLiteral('authorization');
 const BEARER_LABEL = interruptedLiteral('bearer');
@@ -15,6 +16,16 @@ const TOKEN_KEYS = [
   'idtoken',
   'id_token',
   'id-token',
+  'password',
+  'passwd',
+  'smtp_pass',
+  'smtp_user',
+  'username',
+  'credential',
+  'credentials',
+  'secret',
+  'api_key',
+  'apikey',
 ]
   .map(interruptedLiteral)
   .join('|');
@@ -50,6 +61,21 @@ export function sanitizeDiagnosticText(value: string): string {
   return redactSecrets(normalized).replace(/\s+/g, ' ').trim().slice(0, 400);
 }
 
+export function errorSummary(error: unknown, stage: string): string {
+  // Do not traverse causes, stacks or service payloads. Validation errors can
+  // include rejected private input, so retain only their class and a safe hint.
+  const name = error instanceof Error ? error.name : 'NonError';
+  const message =
+    error instanceof Error
+      ? error.name === 'ZodError'
+        ? 'Invalid configuration or source response'
+        : error.message
+      : typeof error === 'string'
+        ? error
+        : 'Non-error value thrown';
+  return `${stage}: ${sanitizeDiagnosticText(name)}: ${sanitizeDiagnosticText(message)}`;
+}
+
 function interruptedLiteral(value: string): string {
   return [...value]
     .map((character) => character.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -58,6 +84,11 @@ function interruptedLiteral(value: string): string {
 
 function redactSecrets(value: string): string {
   return value
+    .replace(/\b(?:https?|smtps?):\/\/[^\s<>"']+/giu, '[URL omitted]')
+    .replace(
+      /["']?\b(?:set-cookie|cookie)["']?\s*[:=][^\r\n]*/giu,
+      '[cookie omitted]',
+    )
     .replace(AUTHORIZATION_PATTERN, '[redacted]')
     .replace(BEARER_PATTERN, '[redacted]')
     .replace(TOKEN_PATTERN, '[redacted]')

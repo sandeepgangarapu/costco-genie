@@ -15,6 +15,14 @@ import type { AppPaths } from './paths.js';
 const configSchema = z.object({
   daysToFetch: z.number().int().min(1).max(365),
   adjustmentWindowDays: z.number().int().min(1).max(365),
+  watchWarehouseNumber: z
+    .string()
+    .regex(/^\d+$/u)
+    .refine((n) => !/^0*847$|^0+$/u.test(n), 'Use a physical warehouse number')
+    .nullable(),
+  watchScheduledHour: z.number().int().min(0).max(23),
+  watchScheduledMinute: z.number().int().min(0).max(59),
+  minimumDropCents: z.number().int().min(0),
   scheduledHour: z.number().int().min(0).max(23),
   scheduledMinute: z.number().int().min(0).max(59),
   scheduledWeekday: z.number().int().min(0).max(6).nullable(),
@@ -37,6 +45,10 @@ export type AppConfig = Readonly<z.infer<typeof configSchema>>;
 export const DEFAULT_CONFIG: AppConfig = Object.freeze({
   daysToFetch: 35,
   adjustmentWindowDays: 30,
+  watchWarehouseNumber: null,
+  watchScheduledHour: 8,
+  watchScheduledMinute: 0,
+  minimumDropCents: 1,
   scheduledHour: 9,
   scheduledMinute: 0,
   scheduledWeekday: null,

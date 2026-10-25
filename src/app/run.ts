@@ -1,3 +1,4 @@
+import { receiptScheduleDue } from '../scheduler/dispatch.js';
 import type { AppConfig } from '../config/config.js';
 import { selectAlerts, type AlertSelection } from '../core/alert-policy.js';
 import { findAdjustments, findOnlineAdjustments } from '../core/matcher.js';
@@ -142,11 +143,18 @@ async function runLocked(
   const startedAt = started.toISOString();
   if (
     options.scheduled === true &&
-    isFresh(
+    (!receiptScheduleDue(
+      dependencies.config,
       dependencies.database.getLastSuccessfulRun(),
       started,
-      scheduledFreshnessMilliseconds(dependencies.config.scheduledIntervalDays),
-    )
+    ) ||
+      isFresh(
+        dependencies.database.getLastSuccessfulRun(),
+        started,
+        scheduledFreshnessMilliseconds(
+          dependencies.config.scheduledIntervalDays,
+        ),
+      ))
   ) {
     const skipped = emptySummary(
       startedAt,
