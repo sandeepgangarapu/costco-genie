@@ -117,6 +117,37 @@ function normalize(
   };
 }
 
+/** Find the containing card, including fields preceding itemNumber. A slice
+ * ending at the next itemNumber can accidentally borrow that next card's dates.
+ * Scan candidate object boundaries independently of the enclosing Flight string.
+ */
+function hydrationCard(text: string, itemIndex: number): string {
+  const scriptStart = Math.max(0, text.lastIndexOf('<script', itemIndex));
+  for (
+    let start = text.lastIndexOf('{', itemIndex);
+    start >= scriptStart;
+    start = text.lastIndexOf('{', start - 1)
+  ) {
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let end = start; end < text.length; end++) {
+      const character = text[end];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (character === '\\') escaped = true;
+        else if (character === '"') quoted = false;
+      } else if (character === '"') quoted = true;
+      else if (character === '{') depth++;
+      else if (character === '}' && --depth === 0) {
+        if (end > itemIndex) return text.slice(start, end + 1);
+        break;
+      }
+    }
+    if (start === 0) break;
+  }
+  return '';
+}
 export function parseSavingsForItem(
   html: string,
   item: string,
@@ -130,13 +161,16 @@ export function parseSavingsForItem(
   for (let i = 0; i < matches.length; i++) {
     const m = matches[i];
     if (!exactItems(m[1], item)) continue;
-    const block = normalized.slice(
-      m.index,
-      matches[i + 1]?.index ?? m.index + 12_000,
-    );
+    const block = hydrationCard(normalized, m.index);
     const applicability = /"applicability":"([^"]+)"/u.exec(block)?.[1] ?? '';
     const override = /"validDatesOverride":"([^"]+)"/u.exec(block)?.[1];
-    const dates = override?.trim() ? range(override) : range(normalized);
+    // Costco also uses this field for limits/selection terms, not just dates.
+    // Reject an attempted malformed date, but use the global period for terms.
+    const dates =
+      range(override ?? '') ??
+      (/\bValid\s+\d|\d{1,2}\/\d{1,2}/iu.test(override ?? '')
+        ? null
+        : range(normalized));
     const priceBlock =
       /"pricesOffCSObject":\[\{([\s\S]*?)\}\]/u.exec(block)?.[1] ?? '';
     const price = /"value":\["(\d+(?:\.\d{1,2})?)"\]/u.exec(priceBlock)?.[1];

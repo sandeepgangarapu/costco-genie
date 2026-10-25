@@ -49,6 +49,27 @@ export async function probeWarehouseCoverage(
       return price && isUsableReportPriceEvidence(price, price.channel);
     }).length;
   const verified = count((p) => p.warehouse);
+  const reasons = (
+    select: (
+      prices: (typeof evidence.items)[number]['prices'],
+    ) => ReportPriceObservation | undefined,
+  ): Record<string, number> => {
+    const counts: Record<string, number> = {};
+    for (const item of evidence.items) {
+      const price = select(item.prices);
+      const reason =
+        price?.unavailableReason ??
+        price?.warehouseEvidence?.unitReason ??
+        price?.warehouseEvidence?.conflictReason ??
+        (price?.warehouseEvidence?.unitBasis === 'lb'
+          ? 'warehouse_per_lb_not_comparable_to_receipt_package'
+          : price?.warehouseEvidence?.variableWeight
+            ? 'warehouse_variable_weight_not_comparable_to_receipt_package'
+            : undefined);
+      if (reason) counts[reason] = (counts[reason] ?? 0) + 1;
+    }
+    return counts;
+  };
   return {
     probe: 'costco-public-warehouse-coverage',
     readOnly: true,
@@ -58,6 +79,12 @@ export async function probeWarehouseCoverage(
     strictWH: count((p) => p.warehouseGraphql),
     verifiedComparable: verified,
     sameDayWouldBeNeeded: requests.length - verified,
+    blockedOrUnavailableReasons: {
+      display: reasons((p) => p.warehouseDisplay),
+      savings: reasons((p) => p.warehouseSavings),
+      strictWH: reasons((p) => p.warehouseGraphql),
+      verifiedComparable: reasons((p) => p.warehouse),
+    },
     diagnostics: evidence.diagnostics
       .filter((d) => d.channel !== 'same_day')
       .map((d) => ({ source: d.source, status: d.status, message: d.message })),
