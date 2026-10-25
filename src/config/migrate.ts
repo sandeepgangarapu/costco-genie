@@ -27,6 +27,7 @@ export function legacyDataDirectory(homeDirectory: string): string {
 }
 
 export interface DataMigrationOptions {
+  readonly readOnly?: boolean;
   readonly rename?: (source: string, destination: string) => void;
   readonly replaceConfig?: (source: string, destination: string) => void;
   readonly isProcessAlive?: (pid: number) => boolean;
@@ -44,6 +45,12 @@ export async function migrateLegacyDataDirectory(
     return;
   }
   if (!pathExistsWithoutFollowing(legacy)) return;
+
+  if (options.readOnly) {
+    throw new Error(
+      'Legacy data needs migration. Run ./costco status before a watch dry run; dry runs do not move data or rewrite configuration.',
+    );
+  }
 
   const original = assertPrivateDirectory(legacy);
   await new FileRunLock(join(legacy, 'run.lock')).runExclusive(async () => {

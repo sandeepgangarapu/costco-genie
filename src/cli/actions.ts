@@ -136,7 +136,8 @@ export function createDefaultCliActions(
     ...defaultCliDependencies(),
     ...options.dependencies,
   };
-  const prepareData = () => dependencies.migrateDataDirectory(homeDirectory);
+  const prepareData = (readOnly = false) =>
+    dependencies.migrateDataDirectory(homeDirectory, { readOnly });
   const legacyAgent = {
     label: LEGACY_AGENT_LABEL,
     plistPath: launchAgentPath(homeDirectory, LEGACY_AGENT_LABEL),
@@ -209,7 +210,7 @@ export function createDefaultCliActions(
       await dependencies.openLoginBrowser(paths);
     },
     watch: async (args) => {
-      await prepareData();
+      await prepareData(args.includes('--dry-run'));
       // A dry run reads configuration without chmod or creating directories.
       const config =
         args.includes('--dry-run') || ['list', 'history'].includes(args[0])

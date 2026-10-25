@@ -50,7 +50,7 @@ Current-file cleanup does not erase earlier Git commits. The published repositor
 
 ## Legacy data-directory migration
 
-The Costco Price Matcher upgrade moves `~/.costco-price-matcher/` to `~/.costco-genie/` once. `migrateLegacyDataDirectory` runs before setup, login, run (including `--scheduled`), every watch command, install-agent, status, and doctor. Help never touches the data directory. The first status, doctor, list/history or dry-run command may therefore perform this offline migration; subsequent checks keep their usual read-only behavior.
+The Costco Price Matcher upgrade moves `~/.costco-price-matcher/` to `~/.costco-genie/` once. `migrateLegacyDataDirectory` runs before setup, login, run (including `--scheduled`), every watch command, install-agent, status, and doctor. Help never touches the data directory. The first status, doctor or list/history command may therefore perform this offline migration. A watch dry run refuses a pending migration and asks you to run `./costco status` first; it never moves data or rewrites configuration.
 
 When the new directory is absent, migration requires a real, current-user-owned legacy directory with no group/other permissions, takes the legacy `run.lock` flock, checks the dedicated profile's Chrome singleton entries, and uses one atomic directory rename. Only a dead process in a local-host `SingletonLock` proves singleton entries stale; live, foreign-host, malformed or ambiguous entries require closing the dedicated Costco Chrome window and retrying. Symlinked roots, profiles, config files and lock files are refused. An active receipt/watch lock, unsafe permissions, or invalid configuration also stops migration. No browser launches, network requests, mail, or profile copies occur.
 

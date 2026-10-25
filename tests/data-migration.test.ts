@@ -332,6 +332,40 @@ describe('migrateLegacyDataDirectory', () => {
 });
 
 describe('CLI migration entry points', () => {
+  it('refuses a legacy-only dry run without moving data, changing permissions, or rewriting config', async () => {
+    const { home, legacy, paths } = fixture();
+    writeFileSync(
+      join(legacy, 'config.json'),
+      JSON.stringify({ smtpConfigPath: join(legacy, 'smtp.json') }),
+    );
+    chmodSync(join(legacy, 'run.lock'), 0o400);
+    const names = readdirSync(legacy);
+    const before = names.map((name) => ({
+      stat: lstatSync(join(legacy, name)),
+      contents: lstatSync(join(legacy, name)).isFile()
+        ? readFileSync(join(legacy, name))
+        : null,
+    }));
+    const actions = createDefaultCliActions({ homeDirectory: home });
+    await expect(actions.watch!(['check', '--dry-run'])).rejects.toThrow(
+      'Run ./costco status before a watch dry run',
+    );
+    expect(existsSync(paths.dataDir)).toBe(false);
+    expect(readdirSync(legacy)).toEqual(names);
+    for (const [index, name] of names.entries()) {
+      const stat = lstatSync(join(legacy, name));
+      expect([stat.ino, stat.mode, stat.mtimeMs]).toEqual([
+        before[index].stat.ino,
+        before[index].stat.mode,
+        before[index].stat.mtimeMs,
+      ]);
+      if (before[index].contents)
+        expect(readFileSync(join(legacy, name))).toEqual(
+          before[index].contents,
+        );
+    }
+  });
+
   it('migrates real legacy config and database on the first offline status and doctor invocation', async () => {
     const { home, legacy, paths } = fixture(false);
     const actions = createDefaultCliActions({
