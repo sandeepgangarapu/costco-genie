@@ -23,9 +23,7 @@ import { Database } from '../src/storage/database.js';
 const temporaryDirectories: string[] = [];
 
 function createTemporaryDirectory(): string {
-  const directory = mkdtempSync(
-    join(tmpdir(), 'costco-price-matcher-database-'),
-  );
+  const directory = mkdtempSync(join(tmpdir(), 'costco-genie-database-'));
   temporaryDirectories.push(directory);
   return directory;
 }
@@ -71,9 +69,7 @@ describe('Database', () => {
   });
 
   it('creates the SQLite file and supports an empty purchase query', () => {
-    const directory = mkdtempSync(
-      join(tmpdir(), 'costco-price-matcher-database-'),
-    );
+    const directory = mkdtempSync(join(tmpdir(), 'costco-genie-database-'));
     temporaryDirectories.push(directory);
     const path = join(directory, 'costco.sqlite');
     const database = Database.open(path);
@@ -426,9 +422,7 @@ describe('Database', () => {
   });
 
   it('migrates legacy aggregate alert state to both channels idempotently', () => {
-    const directory = mkdtempSync(
-      join(tmpdir(), 'costco-price-matcher-database-'),
-    );
+    const directory = mkdtempSync(join(tmpdir(), 'costco-genie-database-'));
     temporaryDirectories.push(directory);
     const path = join(directory, 'costco.sqlite');
     const legacy = new Sqlite(path);

@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { ExecFile } from '../src/lib/process.js';
 import {
   IncompleteLaunchAgentRollbackError,
+  LEGACY_AGENT_LABEL,
   installLaunchAgent,
   renderLaunchAgent,
   type LaunchAgentTransactionOperations,
@@ -190,6 +191,70 @@ describe('LaunchAgent installation', () => {
     ]);
     expect(readFileSync(plistPath, 'utf8')).toBe(renderLaunchAgent(configured));
     expect(leftoverTransactionFiles(directory)).toEqual([]);
+  });
+
+  it('stops installation and keeps the legacy plist if its bootout fails', async () => {
+    const { configured, directory, plistPath } = installFixture();
+    const legacyPlist = join(
+      directory,
+      'LaunchAgents',
+      `${LEGACY_AGENT_LABEL}.plist`,
+    );
+    writeFileSync(legacyPlist, 'synthetic legacy agent');
+    const commands: string[] = [];
+    await expect(
+      installLaunchAgent({
+        plistPath,
+        renderOptions: configured,
+        uid: 501,
+        legacyAgent: { label: LEGACY_AGENT_LABEL, plistPath: legacyPlist },
+        execFile: async (file, args) => {
+          commands.push(args.join(' '));
+          if (args[0] === 'print') throw commandError('Could not find service');
+          if (args[0] === 'bootout')
+            throw commandError('synthetic permission denied', 1);
+          return {
+            stderr: '',
+            stdout: file === configured.nodePath ? 'v22.13.0' : '',
+          };
+        },
+      }),
+    ).rejects.toThrow('synthetic permission denied');
+    expect(readFileSync(legacyPlist, 'utf8')).toBe('synthetic legacy agent');
+    expect(commands.some((command) => command.startsWith('bootstrap'))).toBe(
+      false,
+    );
+    expect(existsSync(plistPath)).toBe(false);
+    expect(leftoverTransactionFiles(directory)).toEqual([]);
+  });
+
+  it('removes an unloaded legacy plist and tolerates an absent legacy service during installation', async () => {
+    const { configured, directory, plistPath } = installFixture();
+    const legacyPlist = join(
+      directory,
+      'LaunchAgents',
+      `${LEGACY_AGENT_LABEL}.plist`,
+    );
+    writeFileSync(legacyPlist, 'synthetic legacy agent');
+    const commands: string[] = [];
+    await installLaunchAgent({
+      plistPath,
+      renderOptions: configured,
+      uid: 501,
+      legacyAgent: { label: LEGACY_AGENT_LABEL, plistPath: legacyPlist },
+      execFile: async (file, args) => {
+        commands.push(args.join(' '));
+        if (args[0] === 'print' || args[0] === 'bootout')
+          throw commandError('Could not find service');
+        return {
+          stderr: '',
+          stdout: file === configured.nodePath ? 'v22.13.0' : '',
+        };
+      },
+    });
+    expect(existsSync(legacyPlist)).toBe(false);
+    expect(commands).toContain(`bootout gui/501/${LEGACY_AGENT_LABEL}`);
+    expect(commands).toContain(`bootstrap gui/501 ${plistPath}`);
   });
 
   it('refuses to boot out a loaded service whose old plist is missing', async () => {

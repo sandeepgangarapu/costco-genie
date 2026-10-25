@@ -28,7 +28,7 @@ describe('watch email uses matcher transports', () => {
     expect(recipient).not.toHaveBeenCalled();
     expect(send).toHaveBeenCalledWith(
       'chosen@example.com',
-      'Costco price drop: 1 item hit a new low',
+      'Costco Genie: 1 item hit a new low',
       message.text,
     );
     await watchMailSender(DEFAULT_CONFIG)(message);

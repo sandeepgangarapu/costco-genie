@@ -1,4 +1,4 @@
-# Working on Costco Price Matcher
+# Working on Costco Genie
 
 ## Help someone set up the app
 
@@ -7,18 +7,20 @@ This is a local macOS CLI for receipt adjustments and unpurchased-item watchlist
 1. Check prerequisites without printing environment variables or reading private account files.
 2. From this checkout, run `./costco setup --no-same-day` for noninteractive setup with no location. If the user has supplied their own location, use `./costco setup --zip YOUR_ZIP --address "YOUR_NEARBY_ADDRESS"`. Add `--email you@example.com` only with the user's chosen recipient. A user running `./costco setup` in Terminal gets an optional settings wizard. Never invent a location or reuse another person's settings.
 3. **A signed-in Costco browser session is required for every live check.** Run `./costco login` and let the user sign in themselves in the dedicated Google Chrome window, including MFA or CAPTCHA. Ask them to close that dedicated window when finished. A session in their everyday Chrome profile, a collaborative browser preview, or another agent browser does not satisfy this requirement.
-4. The application reuses its own persistent profile at `~/.costco-price-matcher/browser-profile/`. Do not copy cookies, tokens, saved passwords, browser caches, or other Chrome profiles into this checkout. Never ask for a Costco password, MFA code, session token, or cookie in chat. Do not bypass MFA or CAPTCHA.
+4. The application reuses its own persistent profile at `~/.costco-genie/browser-profile/`. Do not copy cookies, tokens, saved passwords, browser caches, or other Chrome profiles into this checkout. Never ask for a Costco password, MFA code, session token, or cookie in chat. Do not bypass MFA or CAPTCHA.
 5. `./costco doctor` and `./costco status` are offline checks. Doctor confirms profile presence, **not** whether Costco authentication is valid. Setup does not log in. An unattended or headless environment cannot complete the initial interactive sign-in: report that prerequisite and leave the login step for the user.
-6. A live `./costco run` contacts Costco and can deliver email and local notifications. Run it only when the user has requested a live check or authorized it as part of setup. Review aggregate output; do not paste purchase data or reports into chat. The HTML report is `~/.costco-price-matcher/reports/latest.html`.
+6. A live `./costco run` contacts Costco and can deliver email and local notifications. Run it only when the user has requested a live check or authorized it as part of setup. Review aggregate output; do not paste purchase data or reports into chat. The HTML report is `~/.costco-genie/reports/latest.html`.
 7. Install automatic checks with `./costco install-agent` only if the user wants a schedule. One agent: daily watches at 08:00 plus the configured receipt schedule (daily 09:00 by default). Preserve receipt weekday and freshness settings. This creates a per-user macOS LaunchAgent. Do not use sudo. Reinstall the agent after moving the checkout, changing Node, or changing the schedule.
 
 When Costco authentication expires, repeat `./costco login`; never substitute a stored password or an automated login script. Close the dedicated login window before running a check to avoid a profile lock.
 
+Commands migrate a private legacy `~/.costco-price-matcher/` to `~/.costco-genie/` once under its run lock with Chrome closed; they never copy or merge profiles.
+
 ## Keep the shared repository private-data free
 
-- All per-user settings belong in `~/.costco-price-matcher/config.json`, outside Git. Use setup options or the interactive wizard; do not edit source defaults for a particular user. `.env` files are ignored but are not loaded by this app.
+- All per-user settings belong in `~/.costco-genie/config.json`, outside Git. Use setup options or the interactive wizard; do not edit source defaults for a particular user. `.env` files are ignored but are not loaded by this app.
 - Location defaults must remain `null`. Same-Day estimates need both a user-provided ZIP and a nearby address in that ZIP; leave both null to skip. The location is sent to Costco Same-Day to localize estimates. Never substitute an arbitrary ZIP.
-- Keep SMTP credentials in an owner-only file outside the checkout, usually `~/.costco-price-matcher/smtp.json`, and reference its absolute path in `smtpConfigPath`. Never put credentials into source, a LaunchAgent, logs, fixtures, or documentation.
+- Keep SMTP credentials in an owner-only file outside the checkout, usually `~/.costco-genie/smtp.json`, and reference its absolute path in `smtpConfigPath`. Never put credentials into source, a LaunchAgent, logs, fixtures, or documentation.
 - Do not read or publish the user's home data to diagnose routine setup. Browser state, database, reports, logs, raw requests/responses, account identifiers, receipts, order exports, screenshots, and private configuration must stay out of Git. Share the Git repository, rather than a zip of a working folder.
 - Test fixtures must be synthetic. `TEST-*` order IDs, receipt barcodes made of leading zeros, `example.com` emails, and addresses on Example Street are examples, not real account data. The public Costco storefront application ID is not a member credential.
 - Before sharing changes, inspect `git status --short`, `git diff --check`, `git diff --stat`, and `git ls-files -ci --exclude-standard` (the last should be empty). `.gitignore` does not remove files already tracked. If Gitleaks is available, scan a clean export of the candidate files with `gitleaks dir --redact PATH` and scan history with `gitleaks git --redact --log-opts=--all .`; inspect findings without printing secret values. Synthetic JWTs in diagnostic-redaction tests are intentional.

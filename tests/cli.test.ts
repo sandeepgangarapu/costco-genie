@@ -461,7 +461,12 @@ describe('default CLI status', () => {
     const homeDirectory = mkdtempSync(join(tmpdir(), 'costco-status-home-'));
 
     try {
-      const actions = createDefaultCliActions({ homeDirectory });
+      const actions = createDefaultCliActions({
+        homeDirectory,
+        dependencies: {
+          isLaunchAgentLoaded: async () => false,
+        },
+      });
 
       await expect(actions.status()).resolves.toContain('not set up');
       expect(readdirSync(homeDirectory)).toEqual([]);
@@ -480,6 +485,7 @@ describe('default CLI status', () => {
     try {
       const actions = createDefaultCliActions({
         dependencies: {
+          isLaunchAgentLoaded: async () => false,
           mailApplicationExists: () => true,
           openLoginBrowser: async () => {
             browserOrClientCalls += 1;
@@ -514,11 +520,14 @@ describe('default CLI status', () => {
 
     try {
       const actions = createDefaultCliActions({
-        dependencies: { mailApplicationExists: () => true },
+        dependencies: {
+          isLaunchAgentLoaded: async () => false,
+          mailApplicationExists: () => true,
+        },
         homeDirectory,
       });
       await actions.setup();
-      const root = join(homeDirectory, '.costco-price-matcher');
+      const root = join(homeDirectory, '.costco-genie');
       const paths = [
         root,
         join(root, 'browser-profile'),
@@ -541,7 +550,7 @@ describe('default CLI status', () => {
 
   it('reads a pre-diagnostic legacy database through real status and doctor without migration or mutation', async () => {
     const homeDirectory = mkdtempSync(join(tmpdir(), 'costco-legacy-home-'));
-    const root = join(homeDirectory, '.costco-price-matcher');
+    const root = join(homeDirectory, '.costco-genie');
     const databasePath = join(root, 'costco.sqlite');
     mkdirSync(join(root, 'browser-profile'), { recursive: true });
     mkdirSync(join(root, 'logs'));
@@ -575,7 +584,10 @@ describe('default CLI status', () => {
 
     try {
       const actions = createDefaultCliActions({
-        dependencies: { mailApplicationExists: () => true },
+        dependencies: {
+          isLaunchAgentLoaded: async () => false,
+          mailApplicationExists: () => true,
+        },
         homeDirectory,
       });
 

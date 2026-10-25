@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -76,7 +77,7 @@ describe('URL installer', () => {
     });
     expect(result.status).toBe(0);
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual([
-      `git clone --depth 1 --branch main --single-branch -- https://github.com/sandeepgangarapu/costco-price-matcher.git ${destination}`,
+      `git clone --depth 1 --branch main --single-branch -- https://github.com/sandeepgangarapu/costco-genie.git ${destination}`,
       'costco setup --no-same-day',
     ]);
     expect(result.stdout).toContain('sign in to Costco yourself');
@@ -85,7 +86,7 @@ describe('URL installer', () => {
 
   it('refuses to overwrite an existing checkout', () => {
     const { home, environment } = fixture();
-    const destination = join(home, 'costco-price-matcher');
+    const destination = join(home, 'costco-genie');
     mkdirSync(destination);
     writeFileSync(join(destination, 'keep.txt'), 'keep');
     const result = spawnSync('/bin/sh', [installer], {
@@ -95,6 +96,40 @@ describe('URL installer', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('already exists');
     expect(readFileSync(join(destination, 'keep.txt'), 'utf8')).toBe('keep');
+  });
+
+  it('installs to ~/costco-genie by default', () => {
+    const { home, log, environment } = fixture();
+    const result = spawnSync('/bin/sh', [installer], {
+      env: environment,
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(0);
+    expect(readFileSync(log, 'utf8')).toContain(
+      `costco-genie.git ${join(home, 'costco-genie')}`,
+    );
+    expect(result.stdout).toContain('Costco Genie');
+    expect(result.stdout).toContain('~/.costco-genie/reports/latest.html');
+  });
+
+  it('recognizes a legacy checkout and explains manual steps without moving or downloading', () => {
+    const { home, log, environment } = fixture();
+    const legacy = join(home, 'costco-price-matcher');
+    mkdirSync(legacy);
+    writeFileSync(join(legacy, 'keep.txt'), 'synthetic checkout');
+    const result = spawnSync('/bin/sh', [installer], {
+      env: environment,
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('legacy Costco checkout already exists');
+    expect(result.stderr).toContain('move it yourself to ~/costco-genie');
+    expect(result.stderr).toContain('./costco install-agent');
+    expect(readFileSync(join(legacy, 'keep.txt'), 'utf8')).toBe(
+      'synthetic checkout',
+    );
+    expect(existsSync(log)).toBe(false);
+    expect(existsSync(join(home, 'costco-genie'))).toBe(false);
   });
 
   it('rejects unsupported systems before downloading anything', () => {

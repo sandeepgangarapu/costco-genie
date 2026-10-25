@@ -10,7 +10,7 @@ export interface AppPaths {
 }
 
 export function appPaths(homeDir: string): AppPaths {
-  const dataDir = join(homeDir, '.costco-price-matcher');
+  const dataDir = join(homeDir, '.costco-genie');
 
   return Object.freeze({
     dataDir,

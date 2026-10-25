@@ -1,4 +1,4 @@
-// SQLite/file hardening adapted from costco-price-matcher/src/storage/database.ts.
+// SQLite/file hardening adapted from costco-genie/src/storage/database.ts.
 import Database from 'better-sqlite3';
 import { dirname } from 'node:path';
 import {

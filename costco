@@ -29,13 +29,13 @@ if ! command -v node >/dev/null 2>&1 || ! node -e '
   process.exit(major > 22 || (major === 22 && minor >= 13) ? 0 : 1);
 '; then
   printf '%s\n' \
-    'Node 22.13.0 or newer is required; install NVM, or install Node 22.13.0 or newer with npm, then rerun ./costco.' \
+    'Costco Genie requires Node 22.13.0 or newer; install NVM, or install Node 22.13.0 or newer with npm, then rerun ./costco.' \
     >&2
   exit 1
 fi
 
 if ! command -v npm >/dev/null 2>&1; then
-  printf '%s\n' 'npm is required but was not found on PATH.' >&2
+  printf '%s\n' 'Costco Genie requires npm but it was not found on PATH.' >&2
   exit 1
 fi
 

@@ -1,6 +1,8 @@
-# Scheduling
+# Costco Genie: Scheduling
 
-There is one per-user LaunchAgent, `com.costco-price-matcher.daily`. `./costco install-agent` regenerates and loads its plist; `uninstall-agent` removes it and keeps local data. Reinstall after moving the checkout, changing Node, or changing either schedule. Absolute Node and compiled CLI paths, private logs, and working directory are recorded; credentials are not.
+There is one per-user LaunchAgent, `com.costco-genie.daily`. `./costco install-agent` regenerates and loads its plist; `uninstall-agent` removes it and keeps local data. Reinstall after moving the checkout, changing Node, or changing either schedule. Absolute Node and compiled CLI paths, private logs, and working directory are recorded; credentials are not.
+
+The plist is `~/Library/LaunchAgents/com.costco-genie.daily.plist`; output goes to `~/.costco-genie/logs/stdout.log` and `stderr.log`. Installation also boots out the legacy `com.costco-price-matcher.daily` service and deletes its plist before loading the new service. Cleanup errors stop installation; uninstall attempts to remove both labels even if one removal fails. Status/doctor warn about a remaining legacy plist or loaded service. A final scheduled invocation from the old agent can migrate the data and proceed, provided its recorded checkout and Node paths still exist; reinstall after moving the checkout.
 
 `renderLaunchAgent` in `src/scheduler/launchd.ts` renders a `StartCalendarInterval` array: daily watch time (08:00 by default), plus the existing receipt time (09:00 by default) and optional weekday. Receipt weekday uses 0 Sunday through 6 Saturday; null is daily. `RunAtLoad` stays enabled for daily watch catch-up even with weekly receipts. All triggers invoke `node dist/cli.js run --scheduled`.
 

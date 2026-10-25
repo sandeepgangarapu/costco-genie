@@ -76,6 +76,8 @@ export function renderTextReport(summary: AdjustmentReportSummary): string {
       '',
       'No potential price adjustments found.',
       'Verify any future potential adjustment at the original warehouse.',
+      '',
+      'Sent by Costco Genie.',
     ].join('\n');
   }
 
@@ -119,6 +121,7 @@ export function renderTextReport(summary: AdjustmentReportSummary): string {
             '',
           ],
     ),
+    'Sent by Costco Genie.',
   ]
     .join('\n')
     .trimEnd();
@@ -172,10 +175,12 @@ export function renderHtmlReport(summary: AdjustmentReportSummary): string {
   return `<!doctype html>
 <html lang="en">
   <body>
+    <p>Costco Genie</p>
     <h1>${hasOnline && !hasWarehouse ? 'Potential Costco.com savings' : 'Potential Costco price adjustments'}</h1>
     ${itemSummary}
     <p>${escapeHtml(htmlNotificationGuidance(hasWarehouse, hasOnline))}</p>
     ${body}
+    <footer>Sent by Costco Genie.</footer>
   </body>
 </html>`;
 }

@@ -2,7 +2,7 @@
 import { parseMoneyToCents } from '../lib/money.js';
 
 export function wireCents(value: unknown): number | null {
-  // Origin: costco-price-matcher/src/costco/price-client.ts.
+  // Origin: costco-genie/src/costco/price-client.ts.
   if (typeof value === 'number' && Number.isFinite(value))
     value = String(value);
   const cents =

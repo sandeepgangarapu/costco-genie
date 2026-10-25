@@ -19,7 +19,7 @@ import { appPaths } from '../src/config/paths.js';
 const temporaryHomes: string[] = [];
 
 function createTemporaryHome(): string {
-  const home = mkdtempSync(join(tmpdir(), 'costco-price-matcher-'));
+  const home = mkdtempSync(join(tmpdir(), 'costco-genie-'));
   temporaryHomes.push(home);
   return home;
 }

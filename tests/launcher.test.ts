@@ -167,7 +167,9 @@ describe('one-command launcher', () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Node 22.13.0 or newer is required');
+    expect(result.stderr).toContain(
+      'Costco Genie requires Node 22.13.0 or newer',
+    );
     expect(result.stderr).toContain('install NVM');
     expect(result.stderr).toContain(
       'or install Node 22.13.0 or newer with npm',

@@ -9,7 +9,7 @@ fail() {
 }
 
 if [ "$(uname -s)" != Darwin ]; then
-  fail 'Costco Price Matcher currently requires macOS (Chrome, notifications, and launchd).'
+  fail 'Costco Genie currently requires macOS (Chrome, notifications, and launchd).'
 fi
 
 if ! command -v git >/dev/null 2>&1 || ! xcode-select -p >/dev/null 2>&1; then
@@ -31,12 +31,22 @@ if [ ! -x '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' ] &&
   fail 'Install Google Chrome from https://www.google.com/chrome/, then run this installer again. A signed-in Costco session in a dedicated Chrome profile is required.'
 fi
 
-repository_url=https://github.com/sandeepgangarapu/costco-price-matcher.git
-install_directory=${COSTCO_INSTALL_DIR:-"$HOME/costco-price-matcher"}
+repository_url=https://github.com/sandeepgangarapu/costco-genie.git
+install_directory=${COSTCO_INSTALL_DIR:-"$HOME/costco-genie"}
 case "$install_directory" in
   /*) ;;
   *) fail 'COSTCO_INSTALL_DIR must be an absolute path.' ;;
 esac
+
+# Recognize the old checkout without moving it or creating a second installation.
+legacy_directory="$HOME/costco-price-matcher"
+if [ -z "${COSTCO_INSTALL_DIR:-}" ] &&
+   { [ -e "$legacy_directory" ] || [ -L "$legacy_directory" ]; }; then
+  fail "A legacy Costco checkout already exists: $legacy_directory
+Update that checkout to Costco Genie and run ./costco setup there, or move it yourself to ~/costco-genie first.
+Reinstall the LaunchAgent after any move with ./costco install-agent.
+For a separate checkout, set COSTCO_INSTALL_DIR to a new absolute path. No files were moved."
+fi
 
 # Refuse existing paths, including links. Updates use the checkout's own launcher.
 if [ -e "$install_directory" ] || [ -L "$install_directory" ]; then
@@ -45,7 +55,7 @@ To continue an existing installation, open that folder in Terminal and run ./cos
 For a separate checkout, set COSTCO_INSTALL_DIR to a new absolute path."
 fi
 
-printf 'Downloading Costco Price Matcher to %s\n' "$install_directory"
+printf 'Downloading Costco Genie to %s\n' "$install_directory"
 git clone --depth 1 --branch main --single-branch -- "$repository_url" "$install_directory"
 cd "$install_directory"
 printf '%s\n' 'Installing dependencies and building the app. The first setup may take a few minutes.'
@@ -61,6 +71,6 @@ printf '\n%s\n' \
   'Setup is ready. Your Costco login is the next step:' \
   "1. Open $install_directory in Terminal." \
   '2. Run ./costco login, sign in to Costco yourself (including MFA/CAPTCHA), then close the dedicated Chrome window.' \
-  '3. Run ./costco run, then open ~/.costco-price-matcher/reports/latest.html.' \
+  '3. Run ./costco run, then open ~/.costco-genie/reports/latest.html.' \
   '4. Optional: run ./costco install-agent for automatic daily checks.' \
   'Run ./costco setup any time to change your optional ZIP, address, or email.'

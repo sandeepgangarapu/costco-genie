@@ -1,4 +1,4 @@
-# Price sources and interpretation
+# Costco Genie: Price sources and interpretation
 
 - **Warehouse purchases** are compared with validated current Costco quotations for the original physical warehouse and exact item number. “Verified” means Costco reported a usable current quotation; it does not guarantee stock, a shelf tag, or adjustment eligibility.
 - **Costco.com purchases** are compared with exact Costco.com prices. Online and warehouse comparisons stay separate.

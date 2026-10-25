@@ -33,6 +33,10 @@ import {
 } from '../config/config.js';
 import { appPaths, type AppPaths } from '../config/paths.js';
 import {
+  legacyDataDirectory,
+  migrateLegacyDataDirectory,
+} from '../config/migrate.js';
+import {
   openLoginBrowser,
   readCostcoTokens,
 } from '../costco/browser-session.js';
@@ -49,6 +53,10 @@ import { SmtpMailNotifier } from '../notifications/smtp-mail.js';
 import { MacOsNotifier } from '../notifications/macos.js';
 import { writeFullReport } from '../notifications/full-report.js';
 import {
+  AGENT_LABEL,
+  LEGACY_AGENT_LABEL,
+  isLaunchAgentLoaded,
+  launchAgentPath,
   installLaunchAgent,
   type LaunchAgentInstallOptions,
   type LaunchAgentUninstallOptions,
@@ -57,8 +65,6 @@ import {
 import { Database } from '../storage/database.js';
 import { diagnoseEnvironment, type DoctorReport } from './doctor.js';
 import { promptForSetup, type SetupOptions } from './setup.js';
-
-const AGENT_LABEL = 'com.costco-price-matcher.daily';
 
 export interface CliActions {
   readonly doctor: () => Promise<DoctorReport>;
@@ -81,6 +87,8 @@ export interface DefaultCliActionOptions {
 }
 
 export interface DefaultCliDependencies {
+  readonly isLaunchAgentLoaded: typeof isLaunchAgentLoaded;
+  readonly migrateDataDirectory: typeof migrateLegacyDataDirectory;
   readonly watchSources: (config: AppConfig, paths: AppPaths) => SourceFetcher;
   readonly watchMail: (config: AppConfig) => MailSender;
   readonly promptSetup: (config: AppConfig) => Promise<SetupOptions>;
@@ -128,13 +136,56 @@ export function createDefaultCliActions(
     ...defaultCliDependencies(),
     ...options.dependencies,
   };
+  const prepareData = () => dependencies.migrateDataDirectory(homeDirectory);
+  const legacyAgent = {
+    label: LEGACY_AGENT_LABEL,
+    plistPath: launchAgentPath(homeDirectory, LEGACY_AGENT_LABEL),
+  };
+  const legacyWarnings = async (): Promise<string[]> => {
+    const warnings: string[] = [];
+    if (dependencies.fileExists(legacyDataDirectory(homeDirectory))) {
+      warnings.push(
+        `Legacy data directory still exists at ${legacyDataDirectory(homeDirectory)}; using ${paths.dataDir}. Neither directory will be merged or deleted.`,
+      );
+    }
+    if (
+      dependencies.fileExists(legacyAgent.plistPath) ||
+      (dependencies.platform === 'darwin' &&
+        (await dependencies.isLaunchAgentLoaded(
+          dependencies.getUid(),
+          LEGACY_AGENT_LABEL,
+        )))
+    ) {
+      warnings.push(
+        `Legacy LaunchAgent ${LEGACY_AGENT_LABEL} remains; run ./costco install-agent to replace it, or ./costco uninstall-agent to remove both agents.`,
+      );
+    }
+    return warnings;
+  };
 
   return {
-    doctor: () => runDoctor(paths, dependencies),
+    doctor: async () => {
+      await prepareData();
+      const report = await runDoctor(paths, dependencies);
+      const warnings = await legacyWarnings();
+      return {
+        ok: report.ok && warnings.length === 0,
+        checks: [
+          ...report.checks,
+          ...warnings.map((detail) => ({
+            name: 'legacy-installation',
+            ok: false,
+            detail,
+          })),
+        ],
+      };
+    },
     installAgent: async () => {
+      await prepareData();
       const config = loadConfig(paths);
       const plistPath = launchAgentPath(homeDirectory);
       await dependencies.installLaunchAgent({
+        legacyAgent,
         plistPath,
         renderOptions: {
           cliPath: dependencies.compiledCliPath,
@@ -153,10 +204,12 @@ export function createDefaultCliActions(
       return plistPath;
     },
     login: async () => {
+      await prepareData();
       loadConfig(paths);
       await dependencies.openLoginBrowser(paths);
     },
     watch: async (args) => {
+      await prepareData();
       // A dry run reads configuration without chmod or creating directories.
       const config =
         args.includes('--dry-run') || ['list', 'history'].includes(args[0])
@@ -172,6 +225,7 @@ export function createDefaultCliActions(
       });
     },
     run: async ({ scheduled }) => {
+      await prepareData();
       const config = loadConfig(paths);
       const lock = dependencies.createLock(join(paths.dataDir, 'run.lock'));
       const receipts = () =>
@@ -229,6 +283,7 @@ export function createDefaultCliActions(
       );
     },
     setup: async (options) => {
+      await prepareData();
       const config = loadConfig(paths);
       const changes = options ?? (await dependencies.promptSetup(config));
       saveConfig(paths, { ...config, ...changes });
@@ -236,14 +291,31 @@ export function createDefaultCliActions(
       database.close();
       return paths.configFile;
     },
-    status: async () => statusText(paths, dependencies),
+    status: async () => {
+      await prepareData();
+      return [
+        await statusText(paths, dependencies),
+        ...(await legacyWarnings()).map((warning) => `WARNING: ${warning}`),
+      ].join('\n');
+    },
     uninstallAgent: async () => {
       const plistPath = launchAgentPath(homeDirectory);
-      await dependencies.uninstallLaunchAgent({
-        label: AGENT_LABEL,
-        plistPath,
-        uid: dependencies.getUid(),
-      });
+      const errors: unknown[] = [];
+      for (const agent of [{ label: AGENT_LABEL, plistPath }, legacyAgent]) {
+        try {
+          await dependencies.uninstallLaunchAgent({
+            ...agent,
+            uid: dependencies.getUid(),
+          });
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length > 0)
+        throw new AggregateError(
+          errors,
+          'Could not remove both Costco Genie LaunchAgents; inspect each service before retrying.',
+        );
       return plistPath;
     },
   };
@@ -254,6 +326,7 @@ async function statusText(
   dependencies: DefaultCliDependencies,
 ): Promise<string> {
   const pathLines = [
+    'Costco Genie status',
     `Data directory: ${paths.dataDir}`,
     `Configuration: ${paths.configFile}`,
     `Database: ${paths.databaseFile}`,
@@ -409,6 +482,8 @@ async function runDoctor(
 
 function defaultCliDependencies(): DefaultCliDependencies {
   return {
+    isLaunchAgentLoaded,
+    migrateDataDirectory: migrateLegacyDataDirectory,
     watchSources: (config, paths) => makeSources(config, {}, paths),
     watchMail: watchMailSender,
     promptSetup: promptForSetup,
@@ -452,10 +527,6 @@ function currentUid(): number {
     throw new Error('LaunchAgent management requires macOS or Unix');
   }
   return uid;
-}
-
-function launchAgentPath(homeDirectory: string): string {
-  return join(homeDirectory, 'Library', 'LaunchAgents', `${AGENT_LABEL}.plist`);
 }
 
 function projectDirectory(): string {

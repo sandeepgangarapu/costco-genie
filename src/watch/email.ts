@@ -36,8 +36,8 @@ export function escapeHtml(value: string): string {
 export function renderDrops(drops: Drop[]): Message {
   const count = new Set(drops.map((d) => d.item.id)).size;
   const subject = drops.some((d) => d.unverifiedReason)
-    ? `Costco price drop: ${count} ${count === 1 ? 'item' : 'items'} — includes unverified prices`
-    : `Costco price drop: ${count} ${count === 1 ? 'item hit a new low' : 'items hit new lows'}`;
+    ? `Costco Genie: ${count} ${count === 1 ? 'item' : 'items'} — includes unverified prices`
+    : `Costco Genie: ${count} ${count === 1 ? 'item hit a new low' : 'items hit new lows'}`;
   const headers = [
     'Item',
     'Item number',
@@ -81,15 +81,15 @@ export function renderDrops(drops: Drop[]): Message {
       ];
     },
   );
-  const text = `${subject}\n\n${rows.map((row) => headers.map((h, i) => `${h}: ${row[i]}`).join('\n')).join('\n\n')}\n\nEach price kind has a separate low. Same-Day comparisons use raw Same-Day prices. If unavailable when added, the first usable price is the baseline.`;
-  const html = `<html><body><h1>${escapeHtml(subject)}</h1><table border="1" cellpadding="8" cellspacing="0"><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((value, i) => `<td>${i === 9 ? `<a href="${escapeHtml(value)}">Costco product</a>` : escapeHtml(value)}</td>`).join('')}</tr>`).join('')}</tbody></table><p>Each price kind has a separate low. Same-Day comparisons use raw Same-Day prices; verify estimates in the warehouse. If unavailable when added, the first usable price is the baseline.</p></body></html>`;
+  const text = `${subject}\n\n${rows.map((row) => headers.map((h, i) => `${h}: ${row[i]}`).join('\n')).join('\n\n')}\n\nEach price kind has a separate low. Same-Day comparisons use raw Same-Day prices. If unavailable when added, the first usable price is the baseline.\n\nSent by Costco Genie.`;
+  const html = `<html><body><h1>${escapeHtml(subject)}</h1><table border="1" cellpadding="8" cellspacing="0"><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((value, i) => `<td>${i === 9 ? `<a href="${escapeHtml(value)}">Costco product</a>` : escapeHtml(value)}</td>`).join('')}</tr>`).join('')}</tbody></table><p>Each price kind has a separate low. Same-Day comparisons use raw Same-Day prices; verify estimates in the warehouse. If unavailable when added, the first usable price is the baseline.</p><footer>Sent by Costco Genie.</footer></body></html>`;
   return { subject, text, html };
 }
 export function notice(subject: string, text: string): Message {
   return {
     subject,
-    text,
-    html: `<html><body><h1>${escapeHtml(subject)}</h1><p>${escapeHtml(text)}</p></body></html>`,
+    text: `${text}\n\nSent by Costco Genie.`,
+    html: `<html><body><h1>${escapeHtml(subject)}</h1><p>${escapeHtml(text)}</p><footer>Sent by Costco Genie.</footer></body></html>`,
   };
 }
 export function watchMailSender(config: AppConfig): MailSender {

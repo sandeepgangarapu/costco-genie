@@ -1,4 +1,4 @@
-// Adapted from costco-price-matcher/src/costco/price-client.ts (public GraphQL).
+// Adapted from costco-genie/src/costco/price-client.ts (public GraphQL).
 import { z } from 'zod';
 import { wireCents } from './product.js';
 

@@ -1,4 +1,4 @@
-# Watchlist
+# Costco Genie: Watchlist
 
 Watch items you have not bought yet, independently of receipt adjustments.
 

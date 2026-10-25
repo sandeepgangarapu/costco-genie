@@ -46,8 +46,8 @@ import type { FullReportFiles } from '../notifications/full-report.js';
 import type { AlertChannel, Database } from '../storage/database.js';
 
 const HOUR_MILLISECONDS = 60 * 60 * 1000;
-const ALERT_TITLE = 'Potential Costco price adjustments';
-const AUTH_TITLE = 'Costco sign-in required';
+const ALERT_TITLE = 'Costco Genie: potential price adjustments';
+const AUTH_TITLE = 'Costco Genie: sign-in required';
 // Conservative internal deadline for unofficial HTTP calls held under the lock.
 const EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
 
@@ -1164,7 +1164,7 @@ async function deliverEmail(
       : null;
     await dependencies.mailNotifier.send(
       recipient,
-      weeklyReport === null ? ALERT_TITLE : 'Costco weekly price report',
+      weeklyReport === null ? ALERT_TITLE : 'Costco Genie weekly report',
       weeklyReport === null
         ? renderTextReport({
             candidates: selections.map((selection) => selection.candidate),

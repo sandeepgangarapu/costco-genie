@@ -8,6 +8,7 @@ node_modules/
 *.sqlite-wal
 logs/
 browser-profile/
+.costco-genie/
 .costco-price-matcher/
 .worktrees/
 

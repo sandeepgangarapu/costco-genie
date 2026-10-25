@@ -1,8 +1,8 @@
-# Development
+# Costco Genie: Development
 
 ```sh
-git clone https://github.com/sandeepgangarapu/costco-price-matcher.git
-cd costco-price-matcher
+git clone https://github.com/sandeepgangarapu/costco-genie.git
+cd costco-genie
 ./costco help
 ```
 
@@ -33,7 +33,7 @@ To update a clean checkout, run `git pull --ff-only` and then `./costco help`. L
 The app uses this private folder in your home directory:
 
 ```text
-~/.costco-price-matcher/
+~/.costco-genie/
   config.json       Your settings
   browser-profile/  Your signed-in Chrome session, cookies, and browser state
   costco.sqlite     Purchase lines, price observations, alert state, and run history
@@ -47,6 +47,16 @@ The app creates private directories and owner-only configuration/database/report
 **Share the Git repository link.** Everyone installs their own copy, chooses their own settings, and signs into their own Costco account. Browser profiles, cookies, caches, local configuration, credentials, databases, reports, and logs are excluded by `.gitignore`. Avoid sending a zip of your working folder: ignored local files could be included.
 
 Current-file cleanup does not erase earlier Git commits. The published repository's history and commit metadata remain visible.
+
+## Legacy data-directory migration
+
+The Costco Price Matcher upgrade moves `~/.costco-price-matcher/` to `~/.costco-genie/` once. `migrateLegacyDataDirectory` runs before setup, login, run (including `--scheduled`), every watch command, install-agent, status, and doctor. Help never touches the data directory. The first status, doctor, list/history or dry-run command may therefore perform this offline migration; subsequent checks keep their usual read-only behavior.
+
+When the new directory is absent, migration requires a real, current-user-owned legacy directory with no group/other permissions, takes the legacy `run.lock` flock, checks the dedicated profile's Chrome singleton entries, and uses one atomic directory rename. Only a dead process in a local-host `SingletonLock` proves singleton entries stale; live, foreign-host, malformed or ambiguous entries require closing the dedicated Costco Chrome window and retrying. Symlinked roots, profiles, config files and lock files are refused. An active receipt/watch lock, unsafe permissions, or invalid configuration also stops migration. No browser launches, network requests, mail, or profile copies occur.
+
+Config string path values inside the old directory (including `smtpConfigPath`) receive the new prefix. Other values and unknown settings are preserved, and rewritten configuration keeps its owner-only mode. A failed directory rename, including `EXDEV`, stops without copying data or replacing configuration. If the directory moves but the final config replacement fails, the error identifies the prepared private config file; restore that as `config.json` before retrying. If both directories already exist, use the new directory, warn in status/doctor, and leave both untouched for manual review. Never merge or delete either automatically.
+
+After the repository is renamed to `sandeepgangarapu/costco-genie` and the checkout moved to `~/projects/costco-genie`, rebuild and reinstall the LaunchAgent to record the final absolute paths. Verify status/doctor, settings paths and permissions, and that only the new service remains. The installer recognizes an existing legacy `~/costco-price-matcher` checkout and explains how to update/move it manually; it never moves checkouts.
 
 ## Watchlist implementation
 

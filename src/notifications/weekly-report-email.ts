@@ -58,6 +58,8 @@ export function renderWeeklyReportEmail(report: WeeklyReportEmail): string {
     ...statLines(summary),
     unavailableLine(summary),
     ...warehouseReviewLines(report.rows),
+    '',
+    'Sent by Costco Genie.',
   ];
   return lines.join('\n');
 }
@@ -104,6 +106,7 @@ export function renderWeeklyReportHtml(report: WeeklyReportEmail): string {
   return `<!doctype html>
 <html lang="en">
   <body style="color:#111827;font-family:Arial,sans-serif;font-size:14px">
+    <h1>Costco Genie weekly report</h1>
     <p>Checked: ${checkedAt}</p>
     <h2>Potential adjustments</h2>
     ${table}
@@ -114,6 +117,7 @@ export function renderWeeklyReportHtml(report: WeeklyReportEmail): string {
     ${warehouseReviewLines(report.rows)
       .map((line) => `<p>${escapeHtml(line)}</p>`)
       .join('')}
+    <footer>Sent by Costco Genie.</footer>
   </body>
 </html>`;
 }

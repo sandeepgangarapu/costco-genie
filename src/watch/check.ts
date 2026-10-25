@@ -183,8 +183,8 @@ export async function check(
       try {
         await mail(
           notice(
-            'Costco session expired — run ./costco login',
-            'Run `./costco login` in costco-price-matcher, sign in yourself, then close the dedicated Chrome window. Public price sources can continue working.',
+            'Costco Genie: Costco session expired — run ./costco login',
+            'Run `./costco login` in costco-genie, sign in yourself, then close the dedicated Chrome window. Public price sources can continue working.',
           ),
         );
         store.setState('sessionNotified', 'true');
@@ -207,7 +207,7 @@ export async function check(
       try {
         await mail(
           notice(
-            'Costco watchlist: 3 scheduled checks failed',
+            'Costco Genie watchlist: 3 scheduled checks failed',
             'Three or more consecutive scheduled checks failed, or no source returned a usable price. Run ./costco doctor and ./costco watch check, and inspect the private logs.',
           ),
         );

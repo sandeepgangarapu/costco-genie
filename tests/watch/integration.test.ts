@@ -1,7 +1,13 @@
 import { evaluateLow } from '../../src/watch/domain.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Sqlite from 'better-sqlite3';
-import { chmodSync, readFileSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { Database } from '../../src/storage/database.js';
 import { Store } from '../../src/watch/store.js';
@@ -11,6 +17,7 @@ import {
   loadConfig,
 } from '../../src/config/config.js';
 import { appPaths } from '../../src/config/paths.js';
+import { legacyDataDirectory } from '../../src/config/migrate.js';
 import { makeSources } from '../../src/watch/sources.js';
 import { displayReportPrice } from '../../src/costco/warehouse-display-client.js';
 import { readWatchProductPricesLocked } from '../../src/costco/browser-session.js';
@@ -434,6 +441,7 @@ describe('independent scheduled dispatch', () => {
     const actions = createDefaultCliActions({
       homeDirectory: h,
       dependencies: {
+        isLaunchAgentLoaded: async () => false,
         now: () => new Date(now().getTime() + ticks++),
         watchSources: () => watchSources,
         watchMail: () => vi.fn(async () => {}),
@@ -459,7 +467,10 @@ describe('independent scheduled dispatch', () => {
     const store = new Store(appPaths(h).databaseFile);
     store.add(item);
     store.close();
+    // A final trigger from the legacy agent must migrate before dispatching both checks.
+    renameSync(appPaths(h).dataDir, legacyDataDirectory(h));
     const first = await actions.run({ scheduled: true });
+    expect(existsSync(legacyDataDirectory(h))).toBe(false);
     expect(first.outcome).toBe('failure');
     expect(first.watchFailed).toBe(false);
     expect(acquired).toBe(2);
@@ -473,7 +484,12 @@ describe('independent scheduled dispatch', () => {
 
 it('initializes the shared receipt schema when the first command is watch add --no-check', async () => {
   const h = home();
-  const actions = createDefaultCliActions({ homeDirectory: h });
+  const actions = createDefaultCliActions({
+    homeDirectory: h,
+    dependencies: {
+      isLaunchAgentLoaded: async () => false,
+    },
+  });
   await actions.watch!(['add', item.itemNumber, '--no-check']);
   const db = Database.openReadOnly(appPaths(h).databaseFile);
   expect(db.getLastSuccessfulRun()).toBeNull();

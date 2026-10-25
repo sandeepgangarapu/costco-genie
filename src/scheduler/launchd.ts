@@ -19,6 +19,16 @@ import { ensurePrivateDirectory } from '../lib/filesystem.js';
 const LAUNCHCTL = '/bin/launchctl';
 const PLUTIL = '/usr/bin/plutil';
 
+export const AGENT_LABEL = 'com.costco-genie.daily';
+export const LEGACY_AGENT_LABEL = 'com.costco-price-matcher.daily';
+
+export function launchAgentPath(
+  homeDirectory: string,
+  label = AGENT_LABEL,
+): string {
+  return join(homeDirectory, 'Library', 'LaunchAgents', `${label}.plist`);
+}
+
 export interface LaunchAgentRenderOptions {
   readonly cliPath: string;
   readonly label: string;
@@ -33,6 +43,7 @@ export interface LaunchAgentRenderOptions {
 }
 
 export interface LaunchAgentInstallOptions {
+  readonly legacyAgent?: { readonly label: string; readonly plistPath: string };
   readonly execFile?: ExecFile;
   readonly operations?: Partial<LaunchAgentTransactionOperations>;
   readonly plistPath: string;
@@ -200,6 +211,13 @@ export async function installLaunchAgent(
       verifyBackup(options.plistPath, backupPath);
       phases.backupCreated = true;
     }
+    if (options.legacyAgent !== undefined) {
+      await uninstallLaunchAgent({
+        ...options.legacyAgent,
+        uid: options.uid,
+        execFile,
+      });
+    }
     if (phases.oldLoaded) {
       await execFile(LAUNCHCTL, [
         'bootout',
@@ -349,6 +367,14 @@ async function isAgentLoaded(
     if (isUnavailableAgent(error)) return false;
     throw error;
   }
+}
+
+export async function isLaunchAgentLoaded(
+  uid: number,
+  label: string,
+  execFile: ExecFile = defaultExecFile,
+): Promise<boolean> {
+  return isAgentLoaded(execFile, serviceTarget(uid, label));
 }
 
 type MutableLaunchAgentTransactionPhases = {

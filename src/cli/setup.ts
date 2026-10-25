@@ -78,7 +78,7 @@ export async function collectSetupOptions(
   prompt: SetupPrompt,
 ): Promise<SetupOptions> {
   prompt.log(
-    'Your settings stay in ~/.costco-price-matcher/config.json, outside the repository.',
+    'Your settings stay in ~/.costco-genie/config.json, outside the repository.',
   );
   prompt.log(
     'Press Enter to keep each value. Enter - to clear it. Same-Day estimates are optional.',

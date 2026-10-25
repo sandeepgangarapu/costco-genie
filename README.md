@@ -1,4 +1,4 @@
-# Costco Price Matcher
+# Costco Genie
 
 Find potential price adjustments on recent Costco warehouse receipts and Costco.com orders, and watch items you have not bought for new price lows. This local Mac app writes purchase reports and can email receipt savings and watchlist drops. You verify prices and request any adjustment yourself.
 
@@ -13,13 +13,13 @@ Find potential price adjustments on recent Costco warehouse receipts and Costco.
 Open Terminal and run:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sandeepgangarapu/costco-price-matcher/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sandeepgangarapu/costco-genie/main/install.sh | sh
 ```
 
-You can [read the installer](https://github.com/sandeepgangarapu/costco-price-matcher/blob/main/install.sh) first. It checks prerequisites, downloads the app, installs dependencies, and runs setup. Already cloned? Run `./costco setup` in that checkout.
+You can [read the installer](https://github.com/sandeepgangarapu/costco-genie/blob/main/install.sh) first. It checks prerequisites, downloads the app, installs dependencies, and runs setup. Already cloned? Run `./costco setup` in that checkout.
 
 ```sh
-cd ~/costco-price-matcher
+cd ~/costco-genie
 ./costco login
 ```
 
@@ -39,7 +39,7 @@ Check recent purchases and open the report:
 
 ```sh
 ./costco run
-open ~/.costco-price-matcher/reports/latest.html
+open ~/.costco-genie/reports/latest.html
 ```
 
 Watch items you have not bought (replace the placeholders):
@@ -73,7 +73,9 @@ One LaunchAgent checks watches daily at 08:00 and receipts at their configured t
 
 Status and doctor are offline; profile presence does not prove you are signed in. Uninstalling the agent keeps your data.
 
-Private data lives in `~/.costco-price-matcher/`, including settings, database, browser profile, reports, and logs.
+Private data lives in `~/.costco-genie/`, including settings, database, browser profile, reports, and logs.
+
+Upgrading from Costco Price Matcher? Close its dedicated Chrome window, then run `./costco status` to move the private data directory automatically. If both old and new directories exist, the app uses the new one and warns without merging them. After moving the checkout, reinstall automatic checks with `./costco install-agent`; it removes the old agent. See [upgrade details](docs/development.md#legacy-data-directory-migration).
 
 Share the Git repository; keep your account data, browser session, credentials, and reports private.
 

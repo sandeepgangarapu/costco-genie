@@ -48,7 +48,7 @@ describe('writeFullReport', () => {
     expect(basename(files.htmlFile)).toBe('2026-08-21T16-20-30-456Z.html');
 
     const json = JSON.parse(readFileSync(files.jsonFile, 'utf8')) as unknown;
-    expect(json).toEqual(report);
+    expect(json).toEqual({ ...report, application: 'Costco Genie' });
 
     const csv = readFileSync(files.csvFile, 'utf8');
     const [csvHeader = ''] = csv.split('\n');
@@ -64,6 +64,7 @@ describe('writeFullReport', () => {
         'online_purchase_lines',
       ]),
     );
+    expect(csv).toContain('Costco Genie full price report');
     expect(csv).toContain(
       'purchase,980008,"Kirkland, Premium ""Paper""",321,2026-08-14T18:02:03Z,2,$16.99,$2.00,$15.99,$14.99,verified_warehouse_api,2026-08-21T15:00:00Z,,$15.99,receipt_history,2026-08-14T18:02:03Z,,$14.49,"Save $3, warehouse only",warehouse_savings_page',
     );
@@ -73,6 +74,7 @@ describe('writeFullReport', () => {
 
     const html = readFileSync(files.htmlFile, 'utf8');
     expect(html).toContain('<!doctype html>');
+    expect(html).toContain('<title>Costco Genie full price report</title>');
     expect(html).toContain('<caption>Purchase-line price comparison</caption>');
     expect(html).not.toContain('Unique item summary');
     expect(html).toContain('<strong>Warehouse purchase lines:</strong> 1');
@@ -459,12 +461,13 @@ describe('writeFullReport', () => {
 
     await writeFullReport(paths, second);
 
-    expect(JSON.parse(readFileSync(firstFiles.jsonFile, 'utf8'))).toEqual(
-      first,
-    );
+    expect(JSON.parse(readFileSync(firstFiles.jsonFile, 'utf8'))).toEqual({
+      ...first,
+      application: 'Costco Genie',
+    });
     expect(
       JSON.parse(readFileSync(join(paths.reportsDir, 'latest.json'), 'utf8')),
-    ).toEqual(second);
+    ).toEqual({ ...second, application: 'Costco Genie' });
     expect(statSync(join(paths.reportsDir, 'latest.json')).ino).not.toBe(
       priorLatestInode,
     );
@@ -477,6 +480,7 @@ describe('writeFullReport', () => {
       ),
     ).toEqual({
       schemaVersion: 3,
+      application: 'Costco Genie',
       startedAt: second.startedAt,
       files: {
         html: '2026-08-22T08-09-10-011Z.html',

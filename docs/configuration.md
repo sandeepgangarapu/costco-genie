@@ -1,11 +1,11 @@
-# Configuration
+# Costco Genie: Configuration
 
 The setup wizard asks for optional settings:
 
 - **ZIP and nearby address:** only needed for Costco Same-Day estimates. Use an address in the ZIP where you want prices checked. Leave the ZIP blank to skip estimates. If you supply a ZIP, also supply an address. The location is sent to Costco Same-Day to localize pricing.
 - **Email recipient:** leave blank to send alerts to the first address on an enabled Apple Mail account, or enter your preferred recipient.
 
-Press Enter to keep the displayed value. Enter `-` to clear a value. No location is built in. Your choices stay in `~/.costco-price-matcher/config.json`, outside the repository. Email is sent only when you later run a live check.
+Press Enter to keep the displayed value. Enter `-` to clear a value. No location is built in. Your choices stay in `~/.costco-genie/config.json`, outside the repository. Email is sent only when you later run a live check.
 
 Already downloaded or cloned this repo? Open its folder in Terminal and run `./costco setup` instead. The launcher takes care of dependencies and building. Rerunning setup preserves existing settings unless you change them.
 
@@ -34,7 +34,7 @@ Or skip Same-Day estimates:
 For scheduling and advanced settings, open your local configuration:
 
 ```sh
-open -e ~/.costco-price-matcher/config.json
+open -e ~/.costco-genie/config.json
 ```
 
 This is JSON: use double quotes, keep commas between entries, and write `null` without quotes. **Do not put your settings in source code.** The app reads this file on each command; `.env` files are not loaded. Local configuration also works for scheduled runs without relying on your Terminal's environment variables.

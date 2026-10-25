@@ -19,6 +19,10 @@ import type { PriceObservation } from '../src/domain/types.js';
 import { FileRunLock, RunOverlapError } from '../src/lib/process.js';
 import { installLaunchAgent as installLaunchAgentImplementation } from '../src/scheduler/launchd.js';
 import { Database } from '../src/storage/database.js';
+import {
+  LEGACY_AGENT_LABEL,
+  launchAgentPath,
+} from '../src/scheduler/launchd.js';
 
 const temporaryHomes: string[] = [];
 
@@ -71,7 +75,7 @@ describe('createDefaultCliActions composition', () => {
     const homeDirectory = temporaryHome();
     let databaseOpens = 0;
     let protectedActionStarted = false;
-    const lockPath = join(homeDirectory, '.costco-price-matcher', 'run.lock');
+    const lockPath = join(homeDirectory, '.costco-genie', 'run.lock');
     const actions = createDefaultCliActions({
       dependencies: {
         createLock: (path) => {
@@ -121,7 +125,7 @@ describe('createDefaultCliActions composition', () => {
     await actions.login();
 
     expect(receivedPaths?.browserProfileDir).toBe(
-      join(homeDirectory, '.costco-price-matcher', 'browser-profile'),
+      join(homeDirectory, '.costco-genie', 'browser-profile'),
     );
     expect(tokenReads).toBe(0);
   });
@@ -267,7 +271,7 @@ describe('createDefaultCliActions composition', () => {
     });
     await actions.setup();
     writeFileSync(
-      join(homeDirectory, '.costco-price-matcher', 'config.json'),
+      join(homeDirectory, '.costco-genie', 'config.json'),
       JSON.stringify({ emailRecipient: 'configured@example.com' }),
     );
 
@@ -295,16 +299,14 @@ describe('createDefaultCliActions composition', () => {
         warehouseNumber: '129',
       },
     ]);
-    expect(lockPath).toBe(
-      join(homeDirectory, '.costco-price-matcher', 'run.lock'),
-    );
+    expect(lockPath).toBe(join(homeDirectory, '.costco-genie', 'run.lock'));
     expect(localMessages[0]).toContain('Composed item');
     expect(mailMessages).toEqual([
       expect.objectContaining({ recipient: 'configured@example.com' }),
     ]);
     expect(mailMessages[0]?.text).toContain('Composed item');
     expect(databaseCloses).toBe(2);
-    const dataDirectory = join(homeDirectory, '.costco-price-matcher');
+    const dataDirectory = join(homeDirectory, '.costco-genie');
     expect(summary.reportFiles).toEqual(
       expect.objectContaining({
         htmlFile: expect.stringContaining('/reports/'),
@@ -435,7 +437,15 @@ describe('createDefaultCliActions composition', () => {
     });
     await actions.setup();
 
+    const legacyPlistPath = launchAgentPath(homeDirectory, LEGACY_AGENT_LABEL);
+    mkdirSync(join(homeDirectory, 'Library', 'LaunchAgents'), {
+      recursive: true,
+    });
+    writeFileSync(legacyPlistPath, 'synthetic legacy plist');
     const plistPath = await actions.installAgent();
+    expect(existsSync(legacyPlistPath)).toBe(false);
+    // Uninstall must also remove a legacy plist recreated after installation.
+    writeFileSync(legacyPlistPath, 'synthetic legacy plist');
     await actions.uninstallAgent();
 
     expect(isAbsolute(plistPath)).toBe(true);
@@ -444,7 +454,7 @@ describe('createDefaultCliActions composition', () => {
         plistPath,
         renderOptions: expect.objectContaining({
           cliPath: compiledCliPath,
-          label: 'com.costco-price-matcher.daily',
+          label: 'com.costco-genie.daily',
           nodePath,
           workingDirectory: projectDirectory,
         }),
@@ -453,17 +463,21 @@ describe('createDefaultCliActions composition', () => {
     ]);
     expect(uninstalls).toEqual([
       {
-        label: 'com.costco-price-matcher.daily',
+        label: 'com.costco-genie.daily',
         plistPath,
         uid: 777,
       },
+      { label: LEGACY_AGENT_LABEL, plistPath: legacyPlistPath, uid: 777 },
     ]);
     expect(launchctlCommands).toEqual([
-      'print gui/777/com.costco-price-matcher.daily',
+      'print gui/777/com.costco-genie.daily',
+      `bootout gui/777/${LEGACY_AGENT_LABEL}`,
       `bootstrap gui/777 ${plistPath}`,
-      'bootout gui/777/com.costco-price-matcher.daily',
+      'bootout gui/777/com.costco-genie.daily',
+      `bootout gui/777/${LEGACY_AGENT_LABEL}`,
     ]);
     expect(existsSync(plistPath)).toBe(false);
+    expect(existsSync(legacyPlistPath)).toBe(false);
   });
 
   it('rejects the pinned unsupported Node runtime before writing or loading an agent', async () => {
@@ -507,9 +521,30 @@ describe('createDefaultCliActions composition', () => {
           homeDirectory,
           'Library',
           'LaunchAgents',
-          'com.costco-price-matcher.daily.plist',
+          'com.costco-genie.daily.plist',
         ),
       ),
     ).toBe(false);
+  });
+
+  it('attempts both agent removals even when the first fails and never migrates private data for uninstall', async () => {
+    const attempted: string[] = [];
+    const actions = createDefaultCliActions({
+      homeDirectory: temporaryHome(),
+      dependencies: {
+        migrateDataDirectory: async () => {
+          throw new Error('uninstall must not touch private data');
+        },
+        uninstallLaunchAgent: async ({ label }) => {
+          attempted.push(label);
+          if (label !== LEGACY_AGENT_LABEL)
+            throw new Error('synthetic failure');
+        },
+      },
+    });
+    await expect(actions.uninstallAgent()).rejects.toThrow(
+      'Could not remove both',
+    );
+    expect(attempted).toEqual(['com.costco-genie.daily', LEGACY_AGENT_LABEL]);
   });
 });

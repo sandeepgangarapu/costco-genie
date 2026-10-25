@@ -97,6 +97,7 @@ const CSV_COLUMNS = [
   'warehouse_graphql_price',
   'warehouse_graphql_reason',
   'warehouse_savings_evidence_json',
+  'report_title',
 ] as const;
 
 type CsvColumn = (typeof CSV_COLUMNS)[number];
@@ -117,11 +118,12 @@ export async function writeFullReport(
   const rendered = {
     html: renderFullReportHtml(report),
     csv: renderFullReportCsv(report),
-    json: `${JSON.stringify(report, null, 2)}\n`,
+    json: `${JSON.stringify({ ...report, application: 'Costco Genie' }, null, 2)}\n`,
   };
   const manifest = `${JSON.stringify(
     {
       schemaVersion: report.schemaVersion,
+      application: 'Costco Genie',
       startedAt: report.startedAt,
       files: {
         html: `${stem}.html`,
@@ -298,7 +300,11 @@ function renderFullReportCsv(report: FullRunReport): string {
 }
 
 function csvRecord(values: Partial<Record<CsvColumn, string>>): string[] {
-  return CSV_COLUMNS.map((column) => values[column] ?? '');
+  return CSV_COLUMNS.map((column) =>
+    column === 'report_title'
+      ? 'Costco Genie full price report'
+      : (values[column] ?? ''),
+  );
 }
 
 function csvField(value: string): string {
@@ -324,7 +330,7 @@ function renderFullReportHtml(report: FullRunReport): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Costco full price report</title>
+  <title>Costco Genie full price report</title>
   <style>
     :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; line-height: 1.45; }
     body { color: #172033; background: #f6f8fb; margin: 0; padding: 2rem; }
@@ -343,7 +349,7 @@ function renderFullReportHtml(report: FullRunReport): string {
 </head>
 <body>
 <main>
-  <h1>Costco full price report</h1>
+  <h1>Costco Genie full price report</h1>
   <div class="card">
     <p><strong>Outcome:</strong> ${escapeHtml(report.outcome)}</p>
     <p><strong>Run:</strong> <time datetime="${escapeHtml(report.startedAt)}">${escapeHtml(report.startedAt)}</time> to <time datetime="${escapeHtml(report.finishedAt)}">${escapeHtml(report.finishedAt)}</time></p>

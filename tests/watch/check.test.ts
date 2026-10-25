@@ -231,7 +231,7 @@ describe('lowest usable price since addition', () => {
     expect(mail).toHaveBeenCalledTimes(2);
     expect(s.pending()).toHaveLength(0);
     expect((mail.mock.calls as unknown[][])[1][0]).toMatchObject({
-      subject: 'Costco price drop: 2 items hit new lows',
+      subject: 'Costco Genie: 2 items hit new lows',
     });
   });
   it('emails session expiry once until an authenticated result resets the episode', async () => {

@@ -607,7 +607,7 @@ describe('runPriceCheck', () => {
     expect(deps.mailNotifier.messages).toEqual([
       expect.objectContaining({
         recipient: 'self@example.com',
-        subject: 'Costco weekly price report',
+        subject: 'Costco Genie weekly report',
         text: expect.stringContaining('Items considered: 0'),
         html: expect.stringContaining('<h2>Overall stats</h2>'),
       }),
@@ -2095,7 +2095,7 @@ describe('runPriceCheck', () => {
     expect(deps.localNotifier.messages[0]?.body).not.toContain('Paid:');
     expect(deps.mailNotifier.messages[0]).toMatchObject({
       recipient: 'self@example.com',
-      subject: 'Potential Costco price adjustments',
+      subject: 'Costco Genie: potential price adjustments',
     });
     expect(deps.mailNotifier.messages[0]?.text).toContain('Kirkland Trail Mix');
     expect(deps.mailNotifier.messages[0]?.text).toContain('Paid: $8.99');

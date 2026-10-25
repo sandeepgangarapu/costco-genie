@@ -25,7 +25,9 @@ export {
   type DoctorReport,
 } from './cli/doctor.js';
 
-const HELP = `Usage: costco <command>
+const HELP = `Costco Genie
+
+Usage: costco <command>
 
 Commands:
   setup             Create local configuration and data storage
@@ -48,7 +50,7 @@ Setup (asks optional questions in an interactive terminal):
   ./costco setup --no-same-day
   ./costco setup --watch-warehouse YOUR_WAREHOUSE
 
-Settings are saved outside the repository in ~/.costco-price-matcher/config.json.
+Settings are saved outside the repository in ~/.costco-genie/config.json.
 Live checks require ./costco login: sign in to Costco in the dedicated Chrome
 window, complete MFA/CAPTCHA yourself, then close that window before running.
 `;
@@ -84,7 +86,7 @@ export async function runCli(
           'Next: run `./costco login`, sign in to Costco, then close the dedicated Chrome window.',
         );
         io.log(
-          'Run `./costco run` for your first check. Open ~/.costco-price-matcher/reports/latest.html to see the report.',
+          'Run `./costco run` for your first check. Open ~/.costco-genie/reports/latest.html to see the report.',
         );
         return 0;
       case 'login':
@@ -216,11 +218,15 @@ function formatRunSummary(summary: RunSummary): string {
 }
 
 function formatDoctorReport(report: DoctorReport): string {
-  return report.checks
-    .map(
-      (check) => `${check.ok ? 'PASS' : 'FAIL'} ${check.name}: ${check.detail}`,
-    )
-    .join('\n');
+  return (
+    'Costco Genie doctor\n' +
+    report.checks
+      .map(
+        (check) =>
+          `${check.ok ? 'PASS' : 'FAIL'} ${check.name}: ${check.detail}`,
+      )
+      .join('\n')
+  );
 }
 
 function runExitCode(outcome: RunSummary['outcome']): number {

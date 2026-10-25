@@ -99,9 +99,13 @@ describe('renderWeeklyReportEmail', () => {
     expect(body).toContain(
       'Potential adjustments: 0 (0 verified; 0 Same-Day estimates)',
     );
-    expect(body.trimEnd().endsWith('Current prices unavailable: (none)')).toBe(
-      true,
-    );
+    expect(
+      body
+        .trimEnd()
+        .endsWith(
+          'Current prices unavailable: (none)\n\nSent by Costco Genie.',
+        ),
+    ).toBe(true);
   });
 
   it('shows one adjustment row and puts unavailable names only at the end', () => {
@@ -148,7 +152,9 @@ describe('renderWeeklyReportEmail', () => {
     expect(
       body
         .trimEnd()
-        .endsWith('Current prices unavailable: (Seaweed Sticks; Solar Light)'),
+        .endsWith(
+          'Current prices unavailable: (Seaweed Sticks; Solar Light)\n\nSent by Costco Genie.',
+        ),
     ).toBe(true);
     expect(html).toContain('<table');
     expect(html).toContain('<strong>Test Butter</strong>');
