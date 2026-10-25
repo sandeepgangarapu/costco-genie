@@ -4,6 +4,7 @@ import Sqlite from 'better-sqlite3';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -346,6 +347,51 @@ describe('watch CLI and session lifecycle', () => {
     await runWatchCli(['check', '--dry-run'], deps);
     expect(readFileSync(deps.paths.databaseFile)).toEqual(bytes);
     expect(deps.mail).not.toHaveBeenCalled();
+  });
+  it('the composed dry run takes the real flock without creating or chmodding private files', async () => {
+    const h = home();
+    const paths = appPaths(h);
+    const mail = vi.fn(async () => {});
+    const actions = createDefaultCliActions({
+      homeDirectory: h,
+      dependencies: {
+        watchMail: () => mail,
+        watchSources: () => async () => ({
+          observations: [observation(1000)],
+          session: 'not_required',
+          diagnostics: [],
+        }),
+      },
+    });
+    await actions.setup({});
+    await actions.watch!(['check', '--dry-run']);
+    const lock = join(paths.dataDir, 'run.lock');
+    expect(existsSync(lock)).toBe(false);
+    await actions.watch!([
+      'add',
+      item.itemNumber,
+      '--channel',
+      'online',
+      '--no-check',
+    ]);
+    chmodSync(lock, 0o644);
+    const names = [paths.configFile, paths.databaseFile, lock];
+    const before = names.map((path) => ({
+      contents: readFileSync(path),
+      stat: lstatSync(path),
+    }));
+    expect((await actions.watch!(['check', '--dry-run'])).code).toBe(0);
+    for (const [index, path] of names.entries()) {
+      expect(readFileSync(path)).toEqual(before[index].contents);
+      expect(lstatSync(path).mode).toBe(before[index].stat.mode);
+      expect(lstatSync(path).mtimeMs).toBe(before[index].stat.mtimeMs);
+    }
+    expect(mail).not.toHaveBeenCalled();
+    rmSync(lock);
+    await expect(actions.watch!(['check', '--dry-run'])).rejects.toThrow(
+      'Unsafe filesystem path',
+    );
+    expect(existsSync(lock)).toBe(false);
   });
   it('closes the matcher product session on per-item lookup failures, and skips an empty request', async () => {
     const paths = appPaths(home());

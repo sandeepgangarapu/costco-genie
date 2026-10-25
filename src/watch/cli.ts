@@ -85,6 +85,16 @@ export async function runWatchCli(
     command === 'list' || command === 'history' || values['dry-run'] === true;
   if (readonly && !existsSync(deps.paths.databaseFile))
     return { code: 0, text: 'Watchlist is empty.' };
+  if (values['dry-run'] === true) {
+    const store = new Store(deps.paths.databaseFile, true);
+    try {
+      // Empty lists cannot visit the profile, and need no lock file creation.
+      if (!store.items().length)
+        return { code: 0, text: 'Watchlist is empty.' };
+    } finally {
+      store.close();
+    }
+  }
   const execute = async () => {
     if (!readonly) Database.open(deps.paths.databaseFile).close();
     const store = new Store(deps.paths.databaseFile, readonly);

@@ -140,6 +140,7 @@ const fileRunLockOperations: FileRunLockOperations = {
 
 export interface FileRunLockOptions {
   readonly operations?: FileRunLockOperations;
+  readonly readOnly?: boolean;
 }
 
 export class FileRunLock {
@@ -149,7 +150,15 @@ export class FileRunLock {
     private readonly lockPath: string,
     options: FileRunLockOptions = {},
   ) {
-    this.operations = options.operations ?? fileRunLockOperations;
+    this.operations = options.operations ?? {
+      ...fileRunLockOperations,
+      ...(options.readOnly
+        ? {
+            open: async (path: string) =>
+              openPrivateRegularFile(path, { readOnly: true }),
+          }
+        : {}),
+    };
   }
 
   async runExclusive<T>(action: () => Promise<T>): Promise<T> {

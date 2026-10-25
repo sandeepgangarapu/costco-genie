@@ -47,7 +47,7 @@ import {
 import { fetchOnlineOrderPurchases } from '../costco/online-order-client.js';
 import { fetchReceipts } from '../costco/receipt-client.js';
 import { pathExistsWithoutFollowing } from '../lib/filesystem.js';
-import { FileRunLock } from '../lib/process.js';
+import { FileRunLock, type FileRunLockOptions } from '../lib/process.js';
 import { AppleMailNotifier } from '../notifications/apple-mail.js';
 import { SmtpMailNotifier } from '../notifications/smtp-mail.js';
 import { MacOsNotifier } from '../notifications/macos.js';
@@ -95,7 +95,7 @@ export interface DefaultCliDependencies {
   readonly accessPath: (path: string, mode: number) => void;
   readonly compiledCliPath: string;
   readonly createLocalNotifier: () => LocalNotifier;
-  readonly createLock: (path: string) => RunLock;
+  readonly createLock: (path: string, options?: FileRunLockOptions) => RunLock;
   readonly createMailNotifier: (config: AppConfig) => MailNotifier;
   readonly fetchReceipts: RunDependencies['fetchReceipts'];
   readonly fetchOnlineOrderPurchases: RunDependencies['fetchOnlineOrderPurchases'];
@@ -219,7 +219,9 @@ export function createDefaultCliActions(
       return runWatchCli(args, {
         paths,
         config,
-        lock: dependencies.createLock(join(paths.dataDir, 'run.lock')),
+        lock: dependencies.createLock(join(paths.dataDir, 'run.lock'), {
+          readOnly: args.includes('--dry-run'),
+        }),
         sources: dependencies.watchSources(config, paths),
         mail: dependencies.watchMail(config),
         now: dependencies.now,
@@ -492,7 +494,7 @@ function defaultCliDependencies(): DefaultCliDependencies {
     accessPath: accessSync,
     compiledCliPath: compiledCliPath(),
     createLocalNotifier: () => new MacOsNotifier(),
-    createLock: (path) => new FileRunLock(path),
+    createLock: (path, options) => new FileRunLock(path, options),
     createMailNotifier: (config) =>
       config.smtpConfigPath === null
         ? new AppleMailNotifier()
