@@ -1,5 +1,12 @@
 import Sqlite from 'better-sqlite3';
 import { initializeWatchSchema } from '../watch/store.js';
+import {
+  initializeScheduledFailureSchema,
+  claimScheduledFailure,
+  finishScheduledFailure,
+  lastScheduledFailures,
+} from './scheduled-failures.js';
+import type { FailureRecord } from '../scheduler/failure.js';
 
 import type {
   NotificationResults,
@@ -172,6 +179,7 @@ export class Database {
         ON runs (outcome, finished_at DESC);
     `);
     initializeWatchSchema(this.sqlite);
+    initializeScheduledFailureSchema(this.sqlite);
     this.ensureColumn('runs', 'scheduled', 'INTEGER NOT NULL DEFAULT 0');
     this.scheduledReceiptCondition = 'scheduled = 1';
     this.ensureColumn('price_observations', 'evidence_json', 'TEXT');
@@ -245,6 +253,18 @@ export class Database {
 
   close(): void {
     this.sqlite.close();
+  }
+
+  claimScheduledFailure(record: FailureRecord): boolean {
+    return claimScheduledFailure(this.sqlite, record);
+  }
+
+  finishScheduledFailure(record: FailureRecord): void {
+    finishScheduledFailure(this.sqlite, record);
+  }
+
+  getLastScheduledFailures(): FailureRecord[] {
+    return lastScheduledFailures(this.sqlite);
   }
 
   upsertPurchases(purchases: readonly Purchase[]): void {

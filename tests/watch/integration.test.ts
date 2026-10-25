@@ -709,6 +709,10 @@ describe('independent scheduled dispatch', () => {
       dependencies: {
         isLaunchAgentLoaded: async () => false,
         now: () => new Date(now().getTime() + ticks++),
+        createMailNotifier: () => ({
+          resolveSelfRecipient: async () => 'self@example.com',
+          send: async () => {},
+        }),
         watchSources: () => watchSources,
         watchMail: () => vi.fn(async () => {}),
         createLock: () => ({

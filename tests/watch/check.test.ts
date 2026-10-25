@@ -273,16 +273,16 @@ describe('lowest usable price since addition', () => {
       subject: 'Costco Genie: 2 items hit new lows',
     });
   });
-  it('emails session expiry once until an authenticated result resets the episode', async () => {
+  it('tracks explicit session expiry without a separate email, and clears it on no-gate results', async () => {
     const s = makeStore();
     const mail = vi.fn(async () => {});
     for (const state of [
       'signed_out',
-      'signed_out',
       'unknown',
-      'authenticated',
+      'not_required',
       'signed_out',
-    ] as const)
+      'authenticated',
+    ] as const) {
       await check(
         s,
         DEFAULT_CONFIG,
@@ -291,61 +291,27 @@ describe('lowest usable price since addition', () => {
         {},
         clock,
       );
-    expect(mail).toHaveBeenCalledTimes(2);
-    expect((mail.mock.calls as unknown[][])[0][0]).toMatchObject({
-      subject: expect.stringContaining('Costco session expired'),
-    });
-  });
-  it('clears a legacy expiry flag when no price gate is seen and starts a new gate episode', async () => {
-    const s = makeStore();
-    const mail = vi.fn(async () => {});
-    s.setState('sessionExpired', 'true');
-    s.setState('sessionNotified', 'false');
-    await check(
-      s,
-      DEFAULT_CONFIG,
-      async () => result(1000, 'not_required'),
-      mail,
-      {},
-      clock,
-    );
-    expect(s.state('sessionExpired')).toBe('false');
-    expect(s.state('sessionNotified')).toBe('false');
+      if (state !== 'unknown')
+        expect(s.state('sessionExpired')).toBe(String(state === 'signed_out'));
+    }
     expect(mail).not.toHaveBeenCalled();
-    await check(
-      s,
-      DEFAULT_CONFIG,
-      async () => result(1000, 'signed_out'),
-      mail,
-      {},
-      clock,
-    );
-    expect(mail).toHaveBeenCalledTimes(1);
-    await check(
-      s,
-      DEFAULT_CONFIG,
-      async () => result(1000, 'not_required'),
-      mail,
-      {},
-      clock,
-    );
-    expect(s.state('sessionExpired')).toBe('false');
-    await check(
-      s,
-      DEFAULT_CONFIG,
-      async () => result(1000, 'signed_out'),
-      mail,
-      {},
-      clock,
-    );
-    expect(mail).toHaveBeenCalledTimes(2);
   });
-  it('never delivers a stale expiry notice on an ambiguous or failed lookup', async () => {
+  it('returns login guidance metadata only for the current explicit expired-session failure', async () => {
     const s = makeStore();
     const mail = vi.fn(async () => {});
-    s.setState('sessionExpired', 'true');
-    s.setState('sessionNotified', 'false');
-    await check(
+    const expired = await check(
+      s,
+      DEFAULT_CONFIG,
+      async () => result(null, 'signed_out'),
+      mail,
+      { scheduled: true },
+      clock,
+    );
+    expect(expired).toMatchObject({
+      status: 'failure',
+      failure: { loginRequired: true, stage: 'watch sources' },
+    });
+    const ambiguous = await check(
       s,
       DEFAULT_CONFIG,
       async () => result(null, 'unknown'),
@@ -353,62 +319,32 @@ describe('lowest usable price since addition', () => {
       {},
       clock,
     );
-    await check(
-      s,
-      DEFAULT_CONFIG,
-      async () => {
-        throw new Error('TEST-source-failed');
-      },
-      mail,
-      {},
-      clock,
-    );
+    expect(ambiguous.failure?.loginRequired).toBe(false);
     expect(mail).not.toHaveBeenCalled();
-    await check(
-      s,
-      DEFAULT_CONFIG,
-      async () => result(1000, 'signed_out'),
-      mail,
-      {},
-      clock,
-    );
-    expect(mail).toHaveBeenCalledTimes(1);
   });
-  it('alerts after three scheduled failures once per streak, including thrown source errors', async () => {
+  it('leaves operational delivery to scheduled dispatch, including after three failures and with legacy flags', async () => {
     const s = makeStore();
     const mail = vi.fn(async () => {});
-    const fail = async () => {
-      throw new Error('TEST-source');
-    };
-    for (let i = 0; i < 5; i++)
-      await check(
+    s.setState('scheduledFailures', '2');
+    s.setState('failureNotified', 'false');
+    s.setState('sessionExpired', 'true');
+    s.setState('sessionNotified', 'false');
+    for (let i = 0; i < 5; i++) {
+      const checked = await check(
         s,
         DEFAULT_CONFIG,
-        i % 2 ? fail : async () => result(null),
+        async () => {
+          if (i % 2) throw new Error('TEST-source');
+          return result(null, 'signed_out');
+        },
         mail,
         { scheduled: true },
         clock,
       );
-    expect(mail).toHaveBeenCalledTimes(1);
-    expect(s.state('scheduledFailures')).toBe('5');
-    await check(
-      s,
-      DEFAULT_CONFIG,
-      async () => result(1000),
-      mail,
-      { scheduled: true },
-      () => new Date('2026-10-25T16:00:00Z'),
-    );
-    for (let i = 0; i < 3; i++)
-      await check(
-        s,
-        DEFAULT_CONFIG,
-        fail,
-        mail,
-        { scheduled: true },
-        () => new Date('2026-10-26T16:00:00Z'),
-      );
-    expect(mail).toHaveBeenCalledTimes(2);
+      expect(checked.status).toBe('failure');
+    }
+    expect(mail).not.toHaveBeenCalled();
+    expect(s.state('scheduledFailures')).toBe('2');
   });
   it('skips a scheduled run after a full successful run on the same local day', async () => {
     const s = makeStore();
@@ -453,7 +389,7 @@ describe('lowest usable price since addition', () => {
       clock,
     );
     const diagnostic = failure.diagnostics.join(' ');
-    expect(diagnostic).toContain('fetch sources: TypeError: TEST-timeout');
+    expect(diagnostic).toContain('watch sources: TypeError: TEST-timeout');
     expect(diagnostic).not.toMatch(
       /TEST-PASS|TEST-TOKEN|TEST-COOKIE|TEST-OTHER|example.com/,
     );

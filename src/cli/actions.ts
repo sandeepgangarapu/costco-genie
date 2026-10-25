@@ -63,6 +63,7 @@ import {
   uninstallLaunchAgent,
 } from '../scheduler/launchd.js';
 import { Database } from '../storage/database.js';
+import { notifyScheduledFailure } from '../scheduler/failure.js';
 import { diagnoseEnvironment, type DoctorReport } from './doctor.js';
 import { promptForSetup, type SetupOptions } from './setup.js';
 
@@ -114,6 +115,7 @@ export interface DefaultCliDependencies {
   readonly nodePath: string;
   readonly nodeVersion: string;
   readonly now: () => Date;
+  readonly logError: (message: string) => void;
   readonly openDatabase: (path: string) => Database;
   readonly openLoginBrowser: (paths: AppPaths) => Promise<void>;
   readonly openReadOnlyDatabase: (path: string) => Database;
@@ -277,6 +279,7 @@ export function createDefaultCliActions(
               return {
                 status: result.status,
                 text: formatCheck(result, store.items()),
+                failure: result.failure,
               };
             } finally {
               store.close();
@@ -284,6 +287,16 @@ export function createDefaultCliActions(
           }),
         receipts,
         dependencies.now,
+        (failure) =>
+          notifyScheduledFailure(failure, {
+            config,
+            logPath: join(paths.logDir, 'stderr.log'),
+            openStore: () => dependencies.openDatabase(paths.databaseFile),
+            mail: () => dependencies.createMailNotifier(config),
+            local: () => dependencies.createLocalNotifier(),
+            log: dependencies.logError,
+            now: dependencies.now,
+          }),
       );
     },
     setup: async (options) => {
@@ -515,6 +528,7 @@ function defaultCliDependencies(): DefaultCliDependencies {
     nodePath: process.execPath,
     nodeVersion: process.versions.node,
     now: () => new Date(),
+    logError: (message) => console.error(message),
     openDatabase: Database.open,
     openLoginBrowser,
     openReadOnlyDatabase: Database.openReadOnly,
@@ -570,12 +584,28 @@ function watchStatusText(
         'Watchlist active items: ' + store.items().length,
         'Last successful watch check: ' +
           (store.state('lastSuccessfulCheck') ?? 'never'),
-        'Scheduled watch failures: ' +
-          (store.state('scheduledFailures') ?? '0'),
+        'Watch Costco session: ' +
+          (store.state('sessionExpired') === 'true'
+            ? 'sign-in required'
+            : 'not verified offline'),
         'Pending watch alerts: ' + store.pending().length,
       );
     } finally {
       store.close();
+    }
+    const database = dependencies.openReadOnlyDatabase(paths.databaseFile);
+    try {
+      const failures = database.getLastScheduledFailures();
+      for (const job of ['receipt', 'watch'] as const) {
+        const last = failures.find((failure) => failure.job === job);
+        lines.push(
+          last
+            ? `Last scheduled ${job} failure: ${last.failedAt}; stage: ${last.stage}; notification: ${last.delivery === 'pending' ? 'pending/unknown (attempt reserved)' : last.delivery}${last.deliveryError ? '; ' + last.deliveryError : ''}`
+            : `Last scheduled ${job} failure: never`,
+        );
+      }
+    } finally {
+      database.close();
     }
   } else lines.push('Watchlist is not initialized.');
   return lines.join('\n');

@@ -146,6 +146,7 @@ export interface AdjustmentCandidate {
 }
 
 export interface RunSummary {
+  readonly failure?: import('../scheduler/failure.js').FailureDetails;
   readonly startedAt: string;
   readonly finishedAt: string;
   readonly diagnostic?: string;

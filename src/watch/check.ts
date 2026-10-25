@@ -10,8 +10,10 @@ import {
 } from './domain.js';
 import type { AppConfig } from '../config/config.js';
 import { Store } from './store.js';
-import { notice, renderDrops, type MailSender } from './email.js';
+import { renderDrops, type MailSender } from './email.js';
 import { errorSummary, sanitizeDiagnosticText } from '../lib/diagnostics.js';
+import type { FailureDetails, FailureStage } from '../scheduler/failure.js';
+import { AuthRequiredError } from '../costco/errors.js';
 
 export type SourceFetcher = (
   items: WatchItem[],
@@ -24,6 +26,7 @@ export interface CheckOptions {
   baseline?: boolean;
 }
 export interface CheckResult {
+  failure?: FailureDetails;
   status: 'success' | 'failure' | 'skipped' | 'dry-run';
   drops: Drop[];
   source: SourceResult;
@@ -73,16 +76,19 @@ export async function check(
   const diagnostics: string[] = [];
   const drops: Drop[] = [];
   let failed = false;
-  let stage = 'fetch sources';
+  let stage: FailureStage = 'watch sources';
+  let failure: FailureDetails | undefined;
   try {
+    stage = 'storage';
     const warehouseLows = new Map<number, Low>();
     for (const item of items) {
       const low = store.low(item.id, 'warehouse');
       if (low) warehouseLows.set(item.id, low);
     }
+    stage = 'watch sources';
     source = items.length ? await fetcher(items, warehouseLows) : empty;
     diagnostics.push(...source.diagnostics.map(sanitizeDiagnosticText));
-    stage = 'validate observations';
+    stage = 'watch validation';
     const expected = new Set(
       items.flatMap((item) =>
         kindsFor(item.channel).map((kind) => `${item.id}:${kind}`),
@@ -100,7 +106,8 @@ export async function check(
     if (seen.size !== expected.size)
       throw new Error('Price source omitted an expected observation');
     failed = items.length > 0 && !source.observations.some(usable);
-    stage = 'record observations and evaluate lows';
+    if (failed) failure = { stage: 'watch sources' };
+    stage = 'storage';
     store.transaction(() => {
       if (!options.dryRun) {
         for (const item of items) {
@@ -150,6 +157,7 @@ export async function check(
     });
   } catch (error) {
     failed = true;
+    failure = { stage, loginRequired: error instanceof AuthRequiredError };
     drops.length = 0;
     diagnostics.push(errorSummary(error, stage));
   }
@@ -166,6 +174,7 @@ export async function check(
       }
     } catch (error) {
       failed = true;
+      failure ??= { stage: 'email delivery' };
       diagnostics.push(
         errorSummary(error, 'deliver price-drop email'),
         'Price-drop email failed; pending alerts will be retried on the next check.',
@@ -178,53 +187,8 @@ export async function check(
       source.session === 'not_required'
     ) {
       store.setState('sessionExpired', 'false');
-      store.setState('sessionNotified', 'false');
     } else if (source.session === 'signed_out')
       store.setState('sessionExpired', 'true');
-    if (
-      source.session === 'signed_out' &&
-      store.state('sessionExpired') === 'true' &&
-      store.state('sessionNotified') !== 'true'
-    ) {
-      try {
-        await mail(
-          notice(
-            'Costco Genie: Costco session expired — run ./costco login',
-            'Run `./costco login` in costco-genie, sign in yourself, then close the dedicated Chrome window. Public price sources can continue working.',
-          ),
-        );
-        store.setState('sessionNotified', 'true');
-      } catch (error) {
-        failed = true;
-        diagnostics.push(
-          errorSummary(error, 'deliver session-expiry email'),
-          'Session-expiry email failed; the notice remains pending.',
-        );
-      }
-    }
-  }
-  if (options.scheduled) {
-    const streak = failed
-      ? Number(store.state('scheduledFailures') ?? '0') + 1
-      : 0;
-    store.setState('scheduledFailures', String(streak));
-    if (!failed) store.setState('failureNotified', 'false');
-    if (streak >= 3 && store.state('failureNotified') !== 'true') {
-      try {
-        await mail(
-          notice(
-            'Costco Genie watchlist: 3 scheduled checks failed',
-            'Three or more consecutive scheduled checks failed, or no source returned a usable price. Run ./costco doctor and ./costco watch check, and inspect the private logs.',
-          ),
-        );
-        store.setState('failureNotified', 'true');
-      } catch (error) {
-        diagnostics.push(
-          errorSummary(error, 'deliver operational email'),
-          'Operational email failed; the notice will be retried.',
-        );
-      }
-    }
   }
   const status = failed ? 'failure' : 'success';
   if (!failed && !options.baseline && !options.itemNumber)
@@ -235,5 +199,19 @@ export async function check(
     status,
     diagnostics.join(' ') || null,
   );
-  return { status, drops, source, diagnostics };
+  return {
+    status,
+    drops,
+    source,
+    diagnostics,
+    ...(failure
+      ? {
+          failure: {
+            ...failure,
+            loginRequired:
+              failure.loginRequired || source.session === 'signed_out',
+          },
+        }
+      : {}),
+  };
 }

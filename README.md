@@ -64,6 +64,8 @@ Install automatic checks after your manual checks work:
 
 One LaunchAgent checks watches daily at 08:00 and receipts at their configured time (09:00 by default), with catch-up and freshness guards. Weekly receipt settings are preserved. Reinstall after changing schedules, Node, or the checkout location; see [scheduling](docs/scheduling.md).
 
+If a scheduled run fails, Costco Genie emails you once that day with what to do.
+
 ```sh
 ./costco status
 ./costco doctor

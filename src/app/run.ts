@@ -169,7 +169,14 @@ async function runLocked(
   }
 
   const runId = dependencies.database.beginRun(startedAt, options.scheduled);
-  return executeBegunRun(dependencies, runId, started, startedAt, now);
+  return executeBegunRun(
+    dependencies,
+    runId,
+    started,
+    startedAt,
+    now,
+    options.scheduled === true,
+  );
 }
 
 async function executeBegunRun(
@@ -178,7 +185,9 @@ async function executeBegunRun(
   started: Date,
   startedAt: string,
   now: () => Date,
+  scheduled: boolean,
 ): Promise<RunSummary> {
+  let stage: NonNullable<RunSummary['failure']>['stage'] = 'session access';
   let terminalState: 'idle' | 'in_progress' | 'complete' = 'idle';
   const finish = async (
     summary: RunSummary,
@@ -225,6 +234,7 @@ async function executeBegunRun(
       );
     }
 
+    stage = 'purchase import';
     const fetchStartDate = dateDaysBefore(
       started,
       dependencies.config.daysToFetch,
@@ -330,10 +340,15 @@ async function executeBegunRun(
         emptyNotificationResults(),
         diagnostic || 'Purchase retrieval failed.',
       );
-      return finish(summary, [], purchaseSourceDiagnostics);
+      return finish(
+        { ...summary, failure: { stage: 'purchase import' } },
+        [],
+        purchaseSourceDiagnostics,
+      );
     }
 
     if (successfulPurchaseChannels.size < 2) purchaseSourceFailure = true;
+    stage = 'storage';
     dependencies.database.upsertPurchases(importedPurchases);
     const currentPurchaseIds = new Set(
       importedPurchases.map((purchase) => purchase.id),
@@ -357,6 +372,7 @@ async function executeBegunRun(
 
     let observations: PriceObservation[];
     let priceEvidence: ReportPriceEvidenceResult;
+    stage = 'price lookup';
     try {
       const priceOptions = {
         batchSize: dependencies.config.priceBatchSize,
@@ -398,6 +414,10 @@ async function executeBegunRun(
       }
     } catch (error) {
       const summary: RunSummary = {
+        failure: {
+          stage: 'price lookup',
+          loginRequired: error instanceof AuthRequiredError,
+        },
         ...emptySummary(
           startedAt,
           now().toISOString(),
@@ -425,6 +445,7 @@ async function executeBegunRun(
       );
     }
 
+    stage = 'storage';
     dependencies.database.recordPriceObservations(observations);
     const warehouseCandidates = findAdjustments(
       warehousePurchases,
@@ -469,6 +490,7 @@ async function executeBegunRun(
     );
     const unresolvedPrices = warehouseUnresolvedPrices + onlineUnresolvedPrices;
     const deliveredPurchaseIds = new Set<string>();
+    stage = 'email delivery';
     const local = await deliverLocal(
       dependencies,
       localSelections,
@@ -498,13 +520,15 @@ async function executeBegunRun(
     );
     const notifications = { email, local };
     const outcome =
-      purchaseSourceFailure ||
-      hasBatchFailure ||
-      hasSourceFailure ||
-      local.error !== null ||
-      email.error !== null
-        ? 'partial_failure'
-        : 'success';
+      scheduled && purchaseSourceFailure
+        ? 'failure'
+        : purchaseSourceFailure ||
+            hasBatchFailure ||
+            hasSourceFailure ||
+            local.error !== null ||
+            email.error !== null
+          ? 'partial_failure'
+          : 'success';
     const diagnostics = [
       ...purchaseSourceDiagnostics
         .filter(({ status }) => status === 'error')
@@ -523,6 +547,14 @@ async function executeBegunRun(
         : [`Email delivery failed: ${email.error}`]),
     ];
     const summary: RunSummary = {
+      ...(purchaseSourceFailure
+        ? {
+            failure: {
+              stage: 'purchase import' as const,
+              loginRequired: authImplicated,
+            },
+          }
+        : {}),
       alertsSent: deliveredPurchaseIds.size,
       candidatesFound: verifiedCandidates.length,
       ...(estimatedOpportunities.length === 0
@@ -566,7 +598,10 @@ async function executeBegunRun(
         failureDiagnostic('Run failed', error),
       );
       return finish(
-        summary,
+        {
+          ...summary,
+          failure: { stage, loginRequired: error instanceof AuthRequiredError },
+        },
         [],
         [
           sourceDiagnostic(
@@ -1107,10 +1142,13 @@ async function authRequiredSummary(
   now: () => Date,
 ): Promise<RunSummary> {
   const local = await sendAuthRequired(notifier);
-  return emptySummary(startedAt, now().toISOString(), 'auth_required', {
-    email: notAttempted(),
-    local,
-  });
+  return {
+    ...emptySummary(startedAt, now().toISOString(), 'auth_required', {
+      email: notAttempted(),
+      local,
+    }),
+    failure: { stage: 'authentication', loginRequired: true },
+  };
 }
 
 function selectionsForChannel(

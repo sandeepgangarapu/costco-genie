@@ -1,6 +1,9 @@
 import type { AppConfig } from '../config/config.js';
 import type { RunSummary } from '../domain/types.js';
 import { errorSummary } from '../lib/diagnostics.js';
+import { AuthRequiredError } from '../costco/errors.js';
+import { RunOverlapError } from '../lib/process.js';
+import type { FailureDetails, ScheduledFailure } from './failure.js';
 
 /** Most recent local receipt trigger, including a trigger missed during sleep. */
 export function receiptScheduleDue(
@@ -34,28 +37,59 @@ export interface ScheduledSummary extends RunSummary {
 }
 /** Each callback acquires/releases the same flock. Never overlap profile lifecycles. */
 export async function dispatchScheduledChecks(
-  watch: () => Promise<{ status: string; text: string }>,
+  watch: () => Promise<{
+    status: string;
+    text: string;
+    failure?: FailureDetails;
+  }>,
   receipts: () => Promise<RunSummary>,
   now: () => Date = () => new Date(),
+  onFailure?: (failure: ScheduledFailure) => Promise<void>,
 ): Promise<ScheduledSummary> {
   const startedAt = now().toISOString();
   let watchCheck: string;
   let watchFailed = false;
+  const failures: ScheduledFailure[] = [];
   try {
     const result = await watch();
     watchCheck = result.text;
     watchFailed = result.status === 'failure';
+    if (watchFailed)
+      failures.push({
+        job: 'watch',
+        failedAt: now().toISOString(),
+        ...(result.failure ?? { stage: 'watch check' }),
+      });
   } catch (error) {
     watchCheck = errorSummary(error, 'scheduled watch check');
     watchFailed = true;
+    failures.push({
+      job: 'watch',
+      failedAt: now().toISOString(),
+      ...callbackFailure(error, 'watch check'),
+    });
   }
   // Receipt failures cannot stop a watch attempt, and watch failures cannot stop receipts.
+  let summary: ScheduledSummary;
   try {
-    return { ...(await receipts()), watchCheck, watchFailed };
+    const receipt = await receipts();
+    summary = { ...receipt, watchCheck, watchFailed };
+    if (receipt.outcome === 'failure' || receipt.outcome === 'auth_required')
+      failures.push({
+        job: 'receipt',
+        failedAt: receipt.finishedAt,
+        ...(receipt.failure ?? {
+          stage:
+            receipt.outcome === 'auth_required'
+              ? 'authentication'
+              : 'receipt check',
+          loginRequired: receipt.outcome === 'auth_required',
+        }),
+      });
   } catch (error) {
     // Storage/lock/report cleanup errors can escape the receipt runner. Keep the
     // completed watch outcome visible in launchd output even in that case.
-    return {
+    summary = {
       startedAt,
       finishedAt: now().toISOString(),
       outcome: 'failure',
@@ -68,5 +102,32 @@ export async function dispatchScheduledChecks(
       watchCheck,
       watchFailed,
     };
+    failures.push({
+      job: 'receipt',
+      failedAt: summary.finishedAt,
+      ...callbackFailure(error, 'receipt check'),
+    });
   }
+  // Deliver only after both jobs finish. A notification failure never changes
+  // either job's outcome or prevents the other job from running.
+  for (const failure of failures) {
+    try {
+      await onFailure?.(failure);
+    } catch (error) {
+      console.error(errorSummary(error, 'scheduled failure notification'));
+    }
+  }
+  return summary;
+}
+
+function callbackFailure(
+  error: unknown,
+  stage: 'receipt check' | 'watch check',
+): FailureDetails {
+  if (error instanceof AuthRequiredError)
+    return { stage: 'authentication', loginRequired: true };
+  if (error instanceof RunOverlapError) return { stage: 'run lock' };
+  if (error instanceof Error && error.name === 'SqliteError')
+    return { stage: 'storage' };
+  return { stage };
 }
