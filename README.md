@@ -174,14 +174,31 @@ Never paste this file, your password, or your browser session into an issue or a
 
 ## What the results mean
 
-- **Warehouse purchases** are compared with verified current prices for the original warehouse and exact item number.
+- **Warehouse purchases** are compared with validated current Costco quotations for the original physical warehouse and exact item number. “Verified” means Costco reported a usable current quotation; it does not guarantee stock, a shelf tag, or adjustment eligibility.
 - **Costco.com purchases** are compared with exact Costco.com prices. Online and warehouse comparisons stay separate.
-- **Same-Day estimates** are optional, clearly labeled estimates used when verified warehouse pricing is unavailable. They need manual verification at the warehouse.
+- **Same-Day estimates** are optional, clearly labeled estimates used only for lines still missing a usable verified warehouse price. The browser is skipped when every warehouse line is verified. Estimates need manual verification at the warehouse and never become verified evidence.
 - **Unresolved** means the app could not obtain a usable price. Costco's services do not expose every price, and their undocumented interfaces can change.
 
 The app does not submit adjustment requests. Verify the item, price, date, quantity, and applicable Costco policy before requesting an adjustment. Identical alerts are suppressed; further price drops or approaching deadlines may produce another alert.
 
 This is an unofficial personal tool, unaffiliated with Costco. Receipt and price coverage can change or stop working.
+
+### Current warehouse price sources
+
+The public display-price service is queried without cookies, in sequential batches of at most **eight distinct item numbers and one physical warehouse**. The app uses the warehouse on each receipt, never the online scope or a substitute warehouse. HTTP 200 and partial 206 responses are matched by exact item and warehouse; 404 means unavailable. HTTP 400 produces a configuration diagnostic. HTTP 403/429 triggers bounded backoff and a retry, then stops further display requests if throttling persists.
+
+Source precedence for each warehouse line is:
+
+1. Public warehouse display price, reconciled with the Warehouse Savings page.
+2. A current, exact-item Warehouse Savings final when no usable display quotation exists.
+3. The existing product GraphQL price, accepted only with the strict `WH` program gate.
+4. Optional Same-Day inverse-markup estimate, for unresolved lines only.
+
+The savings page is refreshed on every run with physical warehouse requests, independently of Same-Day. Display `onlinePrice` is the **base**, while `deliveredPrice` is the **effective final** after API discounts. The app validates positive USD amounts and discount arithmetic in integer cents. A matching booklet final is used once. If an API discount is missing, a current warehouse booklet's explicit final can fill it only when base minus the advertised discount corroborates that final. A “Save $X” amount alone never becomes a final or an extra subtraction. Expired, future, ambiguous, and online-only offers cannot establish a warehouse adjustment.
+
+Reports retain each source, base, API discount, delivered final, booklet final, promotion dates, unit basis, and conflict reason. A conflicting final requires review and allows the estimate fallback. Receipt imports currently represent package prices: per-pound rates and unknown API units cannot be compared with them. Missing UOM is **unknown**, even when a rate resembles a receipt price. No average package weight conversion is used. A booklet's explicit exact-item package final and the existing strict WH fallback keep their package-price interpretation; known incompatible display units block those fallbacks too. Potential savings compare the validated current final with the receipt's **net paid** unit price after receipt coupons.
+
+In a **nonrandom 449-item October 2026 sample**, display coverage was about **97% of warehouse-evidenced items**. This is source coverage, not the rate of safe comparisons, price drops, inventory availability, or adjustment eligibility. There was **no shelf-tag validation**; rendered page comparisons share Costco's upstream service. Missing unit metadata, local differences, coupon conflicts, and changes to these undocumented interfaces remain limitations.
 
 ## Your data and sharing this repo
 
@@ -244,5 +261,13 @@ npm run build
 ```
 
 Tests use synthetic data and injected browser/network/mail boundaries; they do not require Costco sign-in or send real messages. Historical design notes are in `docs/superpowers/`.
+
+An explicitly invoked public HTTP coverage probe is available for manual diagnostics:
+
+```sh
+npm run probe:warehouse-coverage -- YOUR_WAREHOUSE_NUMBER YOUR_ITEM_NUMBER [YOUR_ITEM_NUMBER ...]
+```
+
+It prints aggregate display, savings, strict WH, and comparable-price coverage plus the count that would need Same-Day. It does not read private configuration, access the database, send email or notifications, open a browser/profile, or invoke Same-Day. It contacts Costco, so keep it out of offline tests and run it only when authorized. Report JSON schema 3 adds separate display/WH observations and reconciliation evidence; existing database observations migrate with a nullable evidence column.
 
 To update a clean checkout, run `git pull --ff-only` and then `./costco help`. Local settings, session, and reports remain in your home folder. Do not delete that folder as part of an update.
