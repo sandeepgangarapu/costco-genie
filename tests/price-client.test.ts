@@ -1,11 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  fetchReportPriceEvidence,
+  fetchReportPriceEvidence as fetchEvidence,
+  type PriceRequest,
+  type WarehousePriceOptions,
   fetchWarehousePrices,
   type WarehousePriceRequest,
 } from '../src/costco/price-client.js';
 import type { PurchaseChannel } from '../src/domain/types.js';
+
+// Existing tests exercise the no-display fallback; the new suite covers display HTTP.
+const fetchReportPriceEvidence = (
+  requests: readonly PriceRequest[],
+  options: WarehousePriceOptions = {},
+) =>
+  fetchEvidence(requests, {
+    warehouseDisplayPriceFetcher: async () => [],
+    ...options,
+  });
 
 const observedAt = '2026-08-18T21:00:00.000Z';
 
@@ -346,7 +358,7 @@ describe('Same-Day report evidence', () => {
     async (location) => {
       let browserCalls = 0;
       const result = await fetchReportPriceEvidence(
-        [request('1753490', '110')],
+        [request('1753490', '321')],
         {
           fetchFn: async (input) =>
             String(input).includes('/warehouse-savings')
@@ -377,7 +389,7 @@ describe('Same-Day report evidence', () => {
         ? new Response('<p>No current advertised items</p>')
         : productResponse([]);
 
-    const result = await fetchReportPriceEvidence([request('1753490', '110')], {
+    const result = await fetchReportPriceEvidence([request('1753490', '321')], {
       fetchFn,
       now: () => new Date(observedAt),
       sameDayMarkupPercent: 13.5,
@@ -389,7 +401,7 @@ describe('Same-Day report evidence', () => {
           {
             channel: 'same_day',
             itemNumber: '1753490',
-            warehouseNumber: '110',
+            warehouseNumber: '321',
             observedAt,
             promotionText: null,
             source: 'same_day_guest_storefront_zip_10001',
@@ -406,7 +418,7 @@ describe('Same-Day report evidence', () => {
           {
             itemNumber: '1753490',
             purchaseChannel: 'warehouse',
-            warehouseNumber: '110',
+            warehouseNumber: '321',
           },
         ],
         options: expect.objectContaining({
@@ -435,7 +447,7 @@ describe('Same-Day report evidence', () => {
         ? new Response('<p>No current advertised items</p>')
         : productResponse([product('1753490', '17.99', 'ONLINE')]);
 
-    const result = await fetchReportPriceEvidence([request('1753490', '110')], {
+    const result = await fetchReportPriceEvidence([request('1753490', '321')], {
       fetchFn,
       now: () => new Date(observedAt),
       sameDayMarkupPercent: 13.5,
@@ -461,7 +473,7 @@ describe('Same-Day report evidence', () => {
       String(input).includes('/warehouse-savings')
         ? new Response('<p>No current advertised items</p>')
         : productResponse([]);
-    const result = await fetchReportPriceEvidence([request('1753490', '110')], {
+    const result = await fetchReportPriceEvidence([request('1753490', '321')], {
       fetchFn,
       now: () => new Date(observedAt),
       sameDayMarkupPercent: 13.5,
@@ -471,7 +483,7 @@ describe('Same-Day report evidence', () => {
         {
           channel: 'same_day',
           itemNumber: '1753490',
-          warehouseNumber: '110',
+          warehouseNumber: '321',
           observedAt,
           promotionText: null,
           source: 'same_day_guest_storefront_zip_10001',
@@ -528,15 +540,7 @@ describe('fetchReportPriceEvidence', () => {
     expect(productQueries.slice(1).join('\n')).toContain('"111111"');
     expect(productQueries.slice(1).join('\n')).toContain('"222222"');
     expect(savingsRequests).toBe(1);
-    expect(sameDayRequests).toEqual([
-      [
-        {
-          itemNumber: '111111',
-          purchaseChannel: 'warehouse',
-          warehouseNumber: '123',
-        },
-      ],
-    ]);
+    expect(sameDayRequests).toEqual([]);
     expect(result.items).toMatchObject([
       { purchaseChannel: 'warehouse', itemNumber: '111111' },
       {
@@ -581,7 +585,12 @@ describe('fetchReportPriceEvidence', () => {
         purchaseChannel: 'warehouse',
         itemNumber: '111111',
         warehouseNumber: '847',
-        prices: { warehouse: { unitPriceCents: 1234 } },
+        prices: {
+          warehouse: {
+            unitPriceCents: null,
+            unavailableReason: 'invalid_physical_warehouse_scope',
+          },
+        },
       },
       {
         purchaseChannel: 'costco_com',
@@ -751,8 +760,7 @@ describe('fetchReportPriceEvidence', () => {
   });
 
   it('separates online prices and accepts only current exact-item Warehouse Savings final prices', async () => {
-    // Sanitized from the live 2026-08-21 page: global validity copy plus the
-    // escaped Next.js hydration fields used by a real coupon card.
+    // Synthetic coupon hydration with the public page structure.
     const savingsHtml = `
       <p>Pricing shown is warehouse pricing</p>
       <p>Pricing may vary by location and online | Valid 7/27/26 - 8/23/26</p>
@@ -767,13 +775,13 @@ describe('fetchReportPriceEvidence', () => {
       }
       return productResponse([
         product('1753490', '17.99', 'ONLINE'),
-        product('1914460', '49.99', 'ONLINE'),
+        product('980015', '49.99', 'ONLINE'),
         product('999999', '2.00', 'ONLINE'),
       ]);
     };
 
     const result = await fetchReportPriceEvidence(
-      [request('1753490'), request('1914460'), request('999999')],
+      [request('1753490'), request('980015'), request('999999')],
       { fetchFn, now: () => new Date('2026-08-21T16:00:00.000Z') },
     );
 
@@ -794,12 +802,13 @@ describe('fetchReportPriceEvidence', () => {
         sameDay: {
           channel: 'same_day',
           unitPriceCents: null,
-          unavailableReason: 'source_not_configured',
+          unavailableReason: 'verified_warehouse_price_available',
         },
       },
     });
     expect(Object.keys(result.items[0]?.prices.warehouseSavings ?? {})).toEqual(
       [
+        'warehouseEvidence',
         'channel',
         'observedAt',
         'promotionText',
@@ -829,12 +838,12 @@ describe('fetchReportPriceEvidence', () => {
   });
 
   it('does not treat a Save $7 amount as a $7 warehouse price', async () => {
-    const savingsHtml = `<p>Valid 9/21/26 - 10/18/26</p><script>self.__next_f.push("{\\"itemNumber\\":\\"1937993\\",\\"applicability\\":\\"warehouse_online\\",\\"pricesOffCSObject\\":[{\\"value\\":[\\"7\\"],\\"prepend_text\\":\\"Save\\"}]}")</script>`;
+    const savingsHtml = `<p>Valid 9/21/26 - 10/18/26</p><script>self.__next_f.push("{\\"itemNumber\\":\\"980006\\",\\"applicability\\":\\"warehouse_online\\",\\"pricesOffCSObject\\":[{\\"value\\":[\\"7\\"],\\"prepend_text\\":\\"Save\\"}]}")</script>`;
     const fetchFn: typeof fetch = async (input) =>
       String(input).includes('/warehouse-savings')
         ? new Response(savingsHtml)
         : productResponse([]);
-    const result = await fetchReportPriceEvidence([request('1937993')], {
+    const result = await fetchReportPriceEvidence([request('980006')], {
       fetchFn,
       now: () => new Date('2026-10-02T21:48:11.099Z'),
     });
@@ -845,18 +854,18 @@ describe('fetchReportPriceEvidence', () => {
     expect(result.items[0]?.prices.warehouse.unitPriceCents).toBeNull();
   });
 
-  it('uses available Same-Day evidence before looking at Warehouse Savings', async () => {
+  it('uses a verified savings final and skips Same-Day even when it could succeed', async () => {
     let savingsRequests = 0;
     const fetchFn: typeof fetch = async (input) => {
       if (String(input).includes('/warehouse-savings')) {
         savingsRequests += 1;
         return new Response(
-          '<article data-item-number="1937993" data-start-date="2026-09-21" data-end-date="2026-10-18" data-applicability="warehouse" data-final-price="$7">$7</article>',
+          '<article data-item-number="980006" data-start-date="2026-09-21" data-end-date="2026-10-18" data-applicability="warehouse" data-final-price="$7">$7</article>',
         );
       }
       return productResponse([]);
     };
-    const result = await fetchReportPriceEvidence([request('1937993', '110')], {
+    const result = await fetchReportPriceEvidence([request('980006', '321')], {
       fetchFn,
       now: () => new Date('2026-10-02T21:48:11.099Z'),
       sameDayMarkupPercent: 13.5,
@@ -865,8 +874,8 @@ describe('fetchReportPriceEvidence', () => {
       sameDayPriceFetcher: async () => [
         {
           channel: 'same_day',
-          itemNumber: '1937993',
-          warehouseNumber: '110',
+          itemNumber: '980006',
+          warehouseNumber: '321',
           observedAt: '2026-10-02T21:48:11.099Z',
           promotionText: null,
           source: 'same_day_guest_storefront_zip_10001',
@@ -875,9 +884,9 @@ describe('fetchReportPriceEvidence', () => {
         },
       ],
     });
-    expect(savingsRequests).toBe(0);
-    expect(result.items[0]?.prices.warehouse.unitPriceCents).toBeNull();
-    expect(result.items[0]?.prices.sameDay.unitPriceCents).toBe(2269);
+    expect(savingsRequests).toBe(1);
+    expect(result.items[0]?.prices.warehouse.unitPriceCents).toBe(700);
+    expect(result.items[0]?.prices.sameDay.unitPriceCents).toBeNull();
   });
 
   it('batches Costco.com per warehouse with fresh deadlines and keeps successful batches', async () => {

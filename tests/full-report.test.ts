@@ -65,7 +65,7 @@ describe('writeFullReport', () => {
       ]),
     );
     expect(csv).toContain(
-      'purchase,1207907,"Kirkland, Premium ""Paper""",110,2026-08-14T18:02:03Z,2,$16.99,$2.00,$15.99,$14.99,verified_warehouse_api,2026-08-21T15:00:00Z,,$15.99,receipt_history,2026-08-14T18:02:03Z,,$14.49,"Save $3, warehouse only",warehouse_savings_page',
+      'purchase,980008,"Kirkland, Premium ""Paper""",321,2026-08-14T18:02:03Z,2,$16.99,$2.00,$15.99,$14.99,verified_warehouse_api,2026-08-21T15:00:00Z,,$15.99,receipt_history,2026-08-14T18:02:03Z,,$14.49,"Save $3, warehouse only",warehouse_savings_page',
     );
     expect(csv).toContain(
       'costco_com,costco.com:order-fixture-2,costco_com,$16.99,$3.00,$9.00',
@@ -94,9 +94,9 @@ describe('writeFullReport', () => {
     expect(onlineRow).toContain('<td>$16.99</td>');
     expect(onlineRow).toContain('<td>$3.00</td>');
     expect(onlineRow).toContain('<td>$9.00</td>');
-    const warehouseRow = htmlRowForItem(html, '1207907');
+    const warehouseRow = htmlRowForItem(html, '980008');
     expect(warehouseRow).toContain('<td>Warehouse</td>');
-    expect(warehouseRow).toContain('Warehouse 110');
+    expect(warehouseRow).toContain('Warehouse 321');
     expect(html).not.toMatch(/<script|<link[^>]+href=/i);
     expect(html.match(/<\/html>/gu)).toHaveLength(1);
 
@@ -384,8 +384,8 @@ describe('writeFullReport', () => {
     const report = sampleReport();
 
     await expect(
-      writeFullReport(paths, { ...report, schemaVersion: 1 as 2 }),
-    ).rejects.toThrow(/schema version 2/i);
+      writeFullReport(paths, { ...report, schemaVersion: 1 as 3 }),
+    ).rejects.toThrow(/schema version 3/i);
   });
 
   it('renders savings-only evidence when an advertised final price is unavailable', async () => {
@@ -476,7 +476,7 @@ describe('writeFullReport', () => {
         readFileSync(join(paths.reportsDir, 'latest-manifest.json'), 'utf8'),
       ),
     ).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       startedAt: second.startedAt,
       files: {
         html: '2026-08-22T08-09-10-011Z.html',
@@ -520,7 +520,7 @@ describe('writeFullReport', () => {
   it('writes an empty auth-required report with diagnostics', async () => {
     const paths = appPaths(createTemporaryHome());
     const report: FullRunReport = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       startedAt: '2026-08-21T16:20:30.456Z',
       finishedAt: '2026-08-21T16:20:31.000Z',
       outcome: 'auth_required',
@@ -564,9 +564,9 @@ function sampleReport(
     purchase: {
       id: 'purchase-1',
       receiptId: 'receipt-1',
-      itemNumber: '1207907',
+      itemNumber: '980008',
       description: 'Kirkland, Premium "Paper"',
-      warehouseNumber: '110',
+      warehouseNumber: '321',
       purchasedAt: '2026-08-14T18:02:03Z',
       quantity: 2,
       grossUnitCents: 1_699,
@@ -589,7 +589,7 @@ function sampleReport(
   };
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     startedAt: '2026-08-21T16:20:30.456Z',
     finishedAt: '2026-08-21T16:21:00.000Z',
     outcome: 'partial_failure',
@@ -734,3 +734,70 @@ function unavailablePrice(
     promotionText: null,
   } as const;
 }
+
+it('serializes quarantined display/booklet conflicts and unit reasons in schema 3 JSON, CSV and HTML', async () => {
+  const original = sampleReport();
+  const row = original.rows[0]!;
+  const evidence = {
+    warehouseNumber: row.purchase.warehouseNumber,
+    unitBasis: 'unknown' as const,
+    baseCents: 2000,
+    discountCents: 300,
+    deliveredCents: 1700,
+    bookletFinalCents: null,
+    advertisedDiscountCents: 280,
+    quotationCents: 1700,
+    promoEnd: '2026-10-31',
+    conflictReason: 'warehouse_display_booklet_final_conflict',
+    unitReason: 'warehouse_unknown_unit_not_comparable_to_receipt_package',
+  };
+  const warehouse: ReportPriceObservation = {
+    channel: 'warehouse',
+    source: 'warehouse_display_price_api',
+    observedAt: original.startedAt,
+    unitPriceCents: null,
+    unavailableReason: evidence.conflictReason,
+    promotionText: 'Save $2.80',
+    warehouseEvidence: evidence,
+  };
+  const report: FullRunReport = {
+    ...original,
+    rows: [
+      {
+        ...row,
+        prices: {
+          ...row.prices,
+          warehouse,
+          warehouseDisplay: {
+            ...warehouse,
+            channel: 'warehouse_display',
+            unitPriceCents: 1700,
+            unavailableReason: null,
+          },
+        },
+        status: 'not_eligible',
+        reason: evidence.conflictReason,
+        warehouseDeltaCents: null,
+        comparisonChannel: null,
+        comparisonUnitCents: null,
+        comparisonDeltaCents: null,
+        potentialSavingsCents: null,
+      },
+    ],
+  };
+  const files = await writeFullReport(appPaths(createTemporaryHome()), report);
+  const json = JSON.parse(readFileSync(files.jsonFile, 'utf8'));
+  expect(json.schemaVersion).toBe(3);
+  expect(json.rows[0].prices.warehouse.warehouseEvidence).toEqual(evidence);
+  expect(json.rows[0].prices.warehouseDisplay.unitPriceCents).toBe(1700);
+  for (const path of [files.csvFile, files.htmlFile]) {
+    const rendered = readFileSync(path, 'utf8');
+    expect(rendered).toContain(evidence.conflictReason);
+    expect(rendered).toContain(evidence.unitReason);
+    expect(rendered).toContain('2026-10-31');
+  }
+  const html = readFileSync(files.htmlFile, 'utf8');
+  expect(html).toContain('Base: $20.00');
+  expect(html).toContain('API delivered final: $17.00');
+  expect(html).toContain('Costco warehouse display price');
+});

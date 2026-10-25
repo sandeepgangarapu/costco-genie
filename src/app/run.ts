@@ -580,7 +580,7 @@ async function writeTerminalReport(
   sourceDiagnostics: readonly ReportSourceDiagnostic[],
 ): Promise<RunSummary> {
   const reportFiles = await dependencies.writeFullReport({
-    schemaVersion: 2,
+    schemaVersion: 3,
     startedAt: summary.startedAt,
     finishedAt: summary.finishedAt,
     outcome: summary.outcome,
@@ -611,7 +611,16 @@ function fullReportRows(
         : canonicalWarehouseReportPrice(
             currentEvidence?.warehouse,
             reportWarehouseObservation(row.warehousePrice),
+            row.purchase.warehouseNumber,
           ),
+      warehouseDisplay: isOnline
+        ? unavailableReportPrice('warehouse_display', 'not_applicable')
+        : (currentEvidence?.warehouseDisplay ??
+          unavailableReportPrice('warehouse_display', 'source_not_configured')),
+      warehouseGraphql: isOnline
+        ? unavailableReportPrice('warehouse_graphql', 'not_applicable')
+        : (currentEvidence?.warehouseGraphql ??
+          unavailableReportPrice('warehouse_graphql', 'source_not_configured')),
       receiptHistory: isOnline
         ? unavailableReportPrice('receipt_history', 'not_applicable')
         : laterReceiptEvidence(row.purchase, purchases),
@@ -642,6 +651,7 @@ function fullReportRows(
         : row.purchase.paidUnitCents - sameDayWarehouseEstimateCents;
     const estimatedOpportunity =
       !isOnline &&
+      !/^0*847$|^0+$/u.test(row.purchase.warehouseNumber) &&
       row.status !== 'candidate' &&
       !isUsableReportPriceEvidence(prices.warehouse, 'warehouse') &&
       row.daysRemaining !== null &&
@@ -686,7 +696,9 @@ function fullReportRows(
         onlineStatus === null
           ? estimatedOpportunity
             ? 'same_day_estimate_lower_manual_verification_required'
-            : row.reason
+            : row.reason === 'warehouse_price_missing'
+              ? (prices.warehouse.unavailableReason ?? row.reason)
+              : row.reason
           : onlineStatus.reason,
     };
   });
@@ -924,6 +936,16 @@ function toWarehouseObservation(
   item: ReportPriceEvidenceResult['items'][number],
 ): PriceObservation | null {
   const price = item.prices.warehouse;
+  if (
+    !/^\d+$/u.test(item.warehouseNumber) ||
+    /^0*847$|^0+$/u.test(item.warehouseNumber)
+  )
+    return null;
+  if (
+    price.warehouseEvidence &&
+    price.warehouseEvidence.warehouseNumber !== item.warehouseNumber
+  )
+    return null;
   if (!isUsableReportPriceEvidence(price, 'warehouse')) return null;
   return {
     itemNumber: item.itemNumber,
@@ -932,21 +954,42 @@ function toWarehouseObservation(
     source: price.source,
     unitPriceCents: price.unitPriceCents,
     unresolvedReason: null,
+    ...(price.warehouseEvidence
+      ? { warehouseEvidence: price.warehouseEvidence }
+      : {}),
   };
 }
 
 function canonicalWarehouseReportPrice(
   price: ReportPriceObservation | undefined,
   fallback: ReportPriceObservation,
+  warehouseNumber: string,
 ): ReportPriceObservation {
+  if (!/^\d+$/u.test(warehouseNumber) || /^0*847$|^0+$/u.test(warehouseNumber))
+    return unavailableReportPrice(
+      'warehouse',
+      'invalid_physical_warehouse_scope',
+    );
+  if (
+    price?.warehouseEvidence &&
+    price.warehouseEvidence.warehouseNumber !== warehouseNumber
+  )
+    return {
+      ...price,
+      unitPriceCents: null,
+      unavailableReason: 'warehouse_scope_mismatch',
+    };
   if (price === undefined) return fallback;
   if (isUsableReportPriceEvidence(price, 'warehouse')) return price;
-  return unavailableReportPrice(
-    'warehouse',
-    price.channel === 'warehouse' && price.unavailableReason !== null
-      ? price.unavailableReason
-      : 'invalid_warehouse_price_evidence',
-  );
+  return {
+    ...price,
+    channel: 'warehouse',
+    unitPriceCents: null,
+    unavailableReason:
+      price.channel === 'warehouse' && price.unavailableReason !== null
+        ? price.unavailableReason
+        : 'invalid_warehouse_price_evidence',
+  };
 }
 
 function reportWarehouseObservation(
@@ -956,6 +999,9 @@ function reportWarehouseObservation(
     return unavailableReportPrice('warehouse', 'warehouse_price_missing');
   }
   return {
+    ...(observation.warehouseEvidence
+      ? { warehouseEvidence: observation.warehouseEvidence }
+      : {}),
     channel: 'warehouse',
     observedAt: observation.observedAt,
     promotionText: null,
@@ -1036,6 +1082,10 @@ function warehouseUnresolvedPriceCount(
     const item = evidenceByKey.get(priceKey(request));
     return (
       item === undefined ||
+      (item.prices.warehouse.warehouseEvidence !== undefined &&
+        item.prices.warehouse.warehouseEvidence.warehouseNumber !==
+          request.warehouseNumber) ||
+      /^0*847$|^0+$/u.test(request.warehouseNumber) ||
       !isUsableReportPriceEvidence(item.prices.warehouse, 'warehouse')
     );
   }).length;

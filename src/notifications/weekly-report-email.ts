@@ -1,3 +1,5 @@
+import { isUsableReportPriceEvidence } from '../core/price-evidence.js';
+import { warehouseEvidenceDetails } from './warehouse-evidence.js';
 import type { AdjustmentCandidate, FullReportRow } from '../domain/types.js';
 
 export interface WeeklyReportEmail {
@@ -55,6 +57,7 @@ export function renderWeeklyReportEmail(report: WeeklyReportEmail): string {
     'Overall stats',
     ...statLines(summary),
     unavailableLine(summary),
+    ...warehouseReviewLines(report.rows),
   ];
   return lines.join('\n');
 }
@@ -108,6 +111,9 @@ export function renderWeeklyReportHtml(report: WeeklyReportEmail): string {
     <h2>Overall stats</h2>
     <ul>${stats}</ul>
     <p>${escapeHtml(unavailableLine(summary))}</p>
+    ${warehouseReviewLines(report.rows)
+      .map((line) => `<p>${escapeHtml(line)}</p>`)
+      .join('')}
   </body>
 </html>`;
 }
@@ -181,7 +187,8 @@ function candidateCells(candidate: AdjustmentCandidate): string[] {
       ? 'Same-Day estimate'
       : candidate.purchase.purchaseChannel === 'costco_com'
         ? 'Costco.com'
-        : 'Costco warehouse',
+        : warehouseEvidenceDetails(candidate.observation).join('; ') ||
+          'Costco warehouse',
   ];
 }
 
@@ -223,8 +230,8 @@ function unavailableLine(summary: WeeklySummary): string {
 
 function hasVerifiedPrice(row: FullReportRow): boolean {
   return row.purchase.purchaseChannel === 'warehouse'
-    ? row.prices.warehouse.unitPriceCents !== null
-    : row.prices.costcoCom.unitPriceCents !== null;
+    ? isUsableReportPriceEvidence(row.prices.warehouse, 'warehouse')
+    : isUsableReportPriceEvidence(row.prices.costcoCom, 'costco_com');
 }
 
 function hasCurrentPrice(row: FullReportRow): boolean {
@@ -278,4 +285,20 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function warehouseReviewLines(rows: readonly FullReportRow[]): string[] {
+  return rows
+    .filter(
+      (row) =>
+        row.purchase.purchaseChannel === 'warehouse' &&
+        (row.prices.warehouse.warehouseEvidence?.conflictReason ||
+          row.prices.warehouse.warehouseEvidence?.unitReason),
+    )
+    .map(
+      (row) =>
+        safeText(row.purchase.description ?? 'Costco item') +
+        ': ' +
+        warehouseEvidenceDetails(row.prices.warehouse).join('; '),
+    );
 }

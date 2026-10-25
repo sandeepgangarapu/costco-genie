@@ -1,3 +1,4 @@
+import { isUsableWarehousePriceObservation } from './price-evidence.js';
 import type { PriceObservation, Purchase } from '../domain/types.js';
 
 export interface ReportRowConfig {
@@ -186,12 +187,7 @@ function latestByItemAndWarehouse(
 function usablePrice(
   price: PriceObservation | null,
 ): price is PriceObservation & { readonly unitPriceCents: number } {
-  return (
-    price !== null &&
-    price.unresolvedReason === null &&
-    price.unitPriceCents !== null &&
-    isSafePositiveInteger(price.unitPriceCents)
-  );
+  return price !== null && isUsableWarehousePriceObservation(price);
 }
 
 function isValidConfig(config: ReportRowConfig): boolean {

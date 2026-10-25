@@ -475,3 +475,56 @@ describe('Database', () => {
     secondOpen.close();
   });
 });
+
+it('migrates nullable observation evidence without changing legacy purchases or alerts', () => {
+  const path = join(createTemporaryDirectory(), 'legacy-evidence.sqlite');
+  const first = Database.open(path);
+  first.upsertPurchases([purchase]);
+  const observation: PriceObservation = {
+    itemNumber: purchase.itemNumber,
+    warehouseNumber: purchase.warehouseNumber,
+    observedAt: '2026-10-24T12:00:00Z',
+    unitPriceCents: 1000,
+    source: 'warehouse-price-api',
+    unresolvedReason: null,
+  };
+  first.recordPriceObservations([observation]);
+  const alert = {
+    purchaseId: purchase.id,
+    lastNotifiedPriceCents: 1000,
+    urgencyBucket: 'week',
+  };
+  first.saveChannelAlertState('email', alert);
+  first.close();
+  const legacy = new Sqlite(path);
+  legacy.exec('ALTER TABLE price_observations DROP COLUMN evidence_json');
+  legacy.close();
+  const readOnly = Database.openReadOnly(path);
+  expect(readOnly.latestPriceObservations()).toEqual([observation]);
+  readOnly.close();
+  const migrated = Database.open(path);
+  expect(migrated.recentPurchases('2026-01-01')).toEqual([purchase]);
+  expect(migrated.getChannelAlertState('email', purchase.id)).toEqual(alert);
+  expect(migrated.latestPriceObservations()).toEqual([observation]);
+  const withEvidence: PriceObservation = {
+    ...observation,
+    observedAt: '2026-10-24T13:00:00Z',
+    source: 'warehouse_display_price_api',
+    warehouseEvidence: {
+      warehouseNumber: '123',
+      unitBasis: 'each',
+      baseCents: 1300,
+      discountCents: 300,
+      deliveredCents: 1000,
+      bookletFinalCents: 1000,
+      promoEnd: '2026-10-31',
+      conflictReason: null,
+    },
+  };
+  migrated.recordPriceObservations([withEvidence]);
+  expect(migrated.latestPriceObservations()).toEqual([withEvidence]);
+  migrated.close();
+  const again = Database.openReadOnly(path);
+  expect(again.latestPriceObservations()).toEqual([withEvidence]);
+  again.close();
+});

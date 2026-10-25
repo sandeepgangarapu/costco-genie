@@ -15,6 +15,7 @@ export interface Purchase {
 }
 
 export interface PriceObservation {
+  readonly warehouseEvidence?: WarehousePriceEvidence;
   readonly itemNumber: string;
   readonly warehouseNumber: string;
   readonly observedAt: string;
@@ -25,12 +26,15 @@ export interface PriceObservation {
 
 export type PriceChannel =
   | 'warehouse'
+  | 'warehouse_display'
+  | 'warehouse_graphql'
   | 'receipt_history'
   | 'warehouse_savings'
   | 'costco_com'
   | 'same_day';
 
 export interface ReportPriceObservation {
+  readonly warehouseEvidence?: WarehousePriceEvidence;
   readonly channel: PriceChannel;
   readonly unitPriceCents: number | null;
   readonly source: string | null;
@@ -40,6 +44,8 @@ export interface ReportPriceObservation {
 }
 
 export interface ReportPriceChannels {
+  readonly warehouseDisplay?: ReportPriceObservation;
+  readonly warehouseGraphql?: ReportPriceObservation;
   readonly warehouse: ReportPriceObservation;
   readonly receiptHistory: ReportPriceObservation;
   readonly warehouseSavings: ReportPriceObservation;
@@ -75,13 +81,46 @@ export type RunOutcome =
   'success' | 'partial_failure' | 'failure' | 'auth_required' | 'skipped';
 
 export interface FullRunReport {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 3;
   readonly startedAt: string;
   readonly finishedAt: string;
   readonly outcome: RunOutcome;
   readonly diagnostic: string | null;
   readonly rows: readonly FullReportRow[];
   readonly sourceDiagnostics: readonly ReportSourceDiagnostic[];
+}
+
+export type UnitBasis = 'each' | 'lb' | 'unknown';
+
+export interface WarehousePromotion {
+  readonly discountCents: number | null;
+  readonly text: string | null;
+  readonly start: string | null;
+  readonly end: string | null;
+}
+
+/** Source amounts remain quotations even when unsafe for receipt comparison. */
+export interface WarehousePriceEvidence {
+  readonly warehouseNumber: string;
+  readonly baseCents?: number | null;
+  readonly discountCents?: number | null;
+  readonly deliveredCents?: number | null;
+  readonly quotationCents?: number | null;
+  readonly currency?: string | null;
+  readonly unitBasis: UnitBasis;
+  readonly promotions?: readonly WarehousePromotion[];
+  readonly promoStart?: string | null;
+  readonly promoEnd?: string | null;
+  readonly scope?: 'warehouse' | 'online_only' | 'unknown';
+  readonly bookletFinalCents?: number | null;
+  readonly advertisedDiscountCents?: number | null;
+  readonly bookletPromoStart?: string | null;
+  readonly bookletPromoEnd?: string | null;
+  readonly bookletUnitBasis?: UnitBasis;
+  readonly bookletScope?: 'warehouse' | 'online_only' | 'unknown';
+  readonly conflictReason?: string | null;
+  readonly unitReason?: string | null;
+  readonly discountHandling?: string | null;
 }
 
 export interface FullReportFiles {

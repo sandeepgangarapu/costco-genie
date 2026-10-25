@@ -1,3 +1,4 @@
+import { warehouseEvidenceDetails } from './warehouse-evidence.js';
 import type { AdjustmentCandidate } from '../domain/types.js';
 
 export interface AdjustmentReportSummary {
@@ -107,6 +108,7 @@ export function renderTextReport(summary: AdjustmentReportSummary): string {
             `Warehouse: ${escapeText(candidate.purchase.warehouseNumber)}`,
             `Paid: ${formatCents(candidate.purchase.paidUnitCents)}`,
             `Current: ${formatCents(candidate.currentUnitCents)}`,
+            ...warehouseEvidenceDetails(candidate.observation),
             ...(isSameDayCandidate(candidate)
               ? [
                   'Price basis: Estimated warehouse price from Same-Day; manual verification required',
@@ -148,6 +150,7 @@ export function renderHtmlReport(summary: AdjustmentReportSummary): string {
           Original warehouse: ${escapeHtml(candidate.purchase.warehouseNumber)}<br>
           Paid: ${formatCents(candidate.purchase.paidUnitCents)}<br>
           Current: ${formatCents(candidate.currentUnitCents)}<br>
+          ${warehouseEvidenceDetails(candidate.observation).map(escapeHtml).join('<br>')}<br>
           ${isSameDayCandidate(candidate) ? 'Price basis: Estimated warehouse price from Same-Day; manual verification required<br>' : ''}
           Potential savings: ${formatCents(candidate.savingsCents)}<br>
           ${candidate.daysRemaining} ${pluralizeDay(candidate.daysRemaining)} remaining</p>

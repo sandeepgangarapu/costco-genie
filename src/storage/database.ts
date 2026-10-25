@@ -36,6 +36,7 @@ interface PurchaseRow {
 }
 
 interface ObservationRow {
+  evidence_json: string | null;
   item_number: string;
   observed_at: string;
   source: string;
@@ -66,6 +67,7 @@ interface AlertStateRow {
 }
 
 export class Database {
+  private readonly observationEvidenceSelection: string;
   private readonly purchaseChannelSelection: string;
   private readonly runDiagnosticSelection: string;
   private readonly runReportFilesSelection: string;
@@ -77,6 +79,12 @@ export class Database {
   ) {
     this.sqlite.pragma('foreign_keys = ON');
     if (!initializeSchema) {
+      this.observationEvidenceSelection = this.hasColumn(
+        'price_observations',
+        'evidence_json',
+      )
+        ? 'evidence_json'
+        : 'NULL AS evidence_json';
       this.purchaseChannelSelection = this.hasColumn(
         'purchases',
         'purchase_channel',
@@ -158,6 +166,8 @@ export class Database {
       CREATE INDEX IF NOT EXISTS runs_success_idx
         ON runs (outcome, finished_at DESC);
     `);
+    this.ensureColumn('price_observations', 'evidence_json', 'TEXT');
+    this.observationEvidenceSelection = 'evidence_json';
     this.ensureColumn('purchases', 'description', 'TEXT');
     this.ensureColumn('purchases', 'gross_unit_cents', 'INTEGER');
     this.ensureColumn(
@@ -268,16 +278,21 @@ export class Database {
     const statement = this.sqlite.prepare(`
       INSERT INTO price_observations (
         item_number, warehouse_number, observed_at, unit_price_cents, source,
-        unresolved_reason
+        unresolved_reason, evidence_json
       ) VALUES (
         @itemNumber, @warehouseNumber, @observedAt, @unitPriceCents, @source,
-        @unresolvedReason
+        @unresolvedReason, @evidenceJson
       )
     `);
     const insert = this.sqlite.transaction(
       (items: readonly PriceObservation[]) => {
         for (const observation of items) {
-          statement.run(observation);
+          statement.run({
+            ...observation,
+            evidenceJson: observation.warehouseEvidence
+              ? JSON.stringify(observation.warehouseEvidence)
+              : null,
+          });
         }
       },
     );
@@ -307,10 +322,10 @@ export class Database {
       .prepare<[], ObservationRow>(
         `
         SELECT item_number, warehouse_number, observed_at, unit_price_cents,
-               source, unresolved_reason
+               source, unresolved_reason, evidence_json
         FROM (
           SELECT item_number, warehouse_number, observed_at, unit_price_cents,
-                 source, unresolved_reason,
+                 source, unresolved_reason, ${this.observationEvidenceSelection},
                  ROW_NUMBER() OVER (
                    PARTITION BY item_number, warehouse_number
                    ORDER BY observed_at DESC, id DESC
@@ -514,6 +529,13 @@ function parsePurchaseChannel(value: unknown): PurchaseChannel {
 
 function toPriceObservation(row: ObservationRow): PriceObservation {
   return {
+    ...(row.evidence_json === null
+      ? {}
+      : {
+          warehouseEvidence: JSON.parse(row.evidence_json) as NonNullable<
+            PriceObservation['warehouseEvidence']
+          >,
+        }),
     itemNumber: row.item_number,
     observedAt: row.observed_at,
     source: row.source,

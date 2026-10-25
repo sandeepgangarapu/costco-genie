@@ -80,13 +80,13 @@ describe('fetchReceipts', () => {
           {
             amount: '99.98',
             itemDescription01: 'PURCHASED ITEM',
-            itemNumber: '1914460',
+            itemNumber: '980015',
             itemUnitPriceAmount: '49.99',
             unit: '2',
           },
           {
             amount: '-20.00',
-            itemDescription01: '/ 1914460',
+            itemDescription01: '/ 980015',
             itemNumber: '385320',
             itemUnitPriceAmount: '0.00',
             unit: '-2',
@@ -115,11 +115,11 @@ describe('fetchReceipts', () => {
     ]);
 
     expect(adapted.transactions[0]).toMatchObject({
-      coupons: [{ amount: '-20.00', itemNumber: '1914460' }],
+      coupons: [{ amount: '-20.00', itemNumber: '980015' }],
       items: [
         {
           description: 'PURCHASED ITEM',
-          itemNumber: '1914460',
+          itemNumber: '980015',
           quantity: 2,
           unitPrice: '49.99',
         },

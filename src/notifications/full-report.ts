@@ -1,3 +1,4 @@
+import { warehouseEvidenceDetails } from './warehouse-evidence.js';
 import { randomUUID } from 'node:crypto';
 import { renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -89,6 +90,13 @@ const CSV_COLUMNS = [
   'source_diagnostic_status',
   'source_diagnostic_observed_at',
   'source_diagnostic_message',
+  'warehouse_evidence_json',
+  'warehouse_display_price',
+  'warehouse_display_reason',
+  'warehouse_display_evidence_json',
+  'warehouse_graphql_price',
+  'warehouse_graphql_reason',
+  'warehouse_savings_evidence_json',
 ] as const;
 
 type CsvColumn = (typeof CSV_COLUMNS)[number];
@@ -205,6 +213,25 @@ function renderFullReportCsv(report: FullRunReport): string {
       net_paid_unit_price: formatCents(row.purchase.paidUnitCents),
       current_warehouse_price: formatOptionalCents(warehouse.unitPriceCents),
       warehouse_source: warehouse.source ?? 'Unavailable',
+      warehouse_evidence_json: JSON.stringify(
+        warehouse.warehouseEvidence ?? null,
+      ),
+      warehouse_display_price: formatOptionalCents(
+        row.prices.warehouseDisplay?.unitPriceCents ?? null,
+      ),
+      warehouse_display_reason:
+        row.prices.warehouseDisplay?.unavailableReason ?? '',
+      warehouse_display_evidence_json: JSON.stringify(
+        row.prices.warehouseDisplay?.warehouseEvidence ?? null,
+      ),
+      warehouse_graphql_price: formatOptionalCents(
+        row.prices.warehouseGraphql?.unitPriceCents ?? null,
+      ),
+      warehouse_graphql_reason:
+        row.prices.warehouseGraphql?.unavailableReason ?? '',
+      warehouse_savings_evidence_json: JSON.stringify(
+        savings.warehouseEvidence ?? null,
+      ),
       warehouse_observed_at: warehouse.observedAt ?? 'Unavailable',
       warehouse_unavailable_reason: warehouse.unavailableReason ?? '',
       historical_receipt_price: formatOptionalCents(
@@ -329,7 +356,7 @@ function renderFullReportHtml(report: FullRunReport): string {
     <table>
       <caption>Purchase-line price comparison</caption>
       <thead><tr>
-        <th scope="col">Item</th><th scope="col">Name</th><th scope="col">Purchase channel</th><th scope="col">Receipt / order</th><th scope="col">Purchase location</th><th scope="col">Purchased</th><th scope="col">Active quantity</th><th scope="col">Gross unit</th><th scope="col">Receipt discount</th><th scope="col">Net paid unit</th><th scope="col">Comparison channel</th><th scope="col">Comparison price</th><th scope="col">Unit delta</th><th scope="col">Potential savings</th><th scope="col">Current warehouse</th><th scope="col">Historical receipt evidence</th><th scope="col">Warehouse Savings</th><th scope="col">Costco.com</th><th scope="col">Same-Day</th><th scope="col">Same-Day corrected warehouse estimate</th><th scope="col">Estimated delta</th><th scope="col">Warehouse delta</th><th scope="col">Days left</th><th scope="col">Status</th><th scope="col">Reason</th>
+        <th scope="col">Item</th><th scope="col">Name</th><th scope="col">Purchase channel</th><th scope="col">Receipt / order</th><th scope="col">Purchase location</th><th scope="col">Purchased</th><th scope="col">Active quantity</th><th scope="col">Gross unit</th><th scope="col">Receipt discount</th><th scope="col">Net paid unit</th><th scope="col">Comparison channel</th><th scope="col">Comparison price</th><th scope="col">Unit delta</th><th scope="col">Potential savings</th><th scope="col">Current warehouse</th><th scope="col">Display quotation</th><th scope="col">Strict WH GraphQL</th><th scope="col">Historical receipt evidence</th><th scope="col">Warehouse Savings</th><th scope="col">Costco.com</th><th scope="col">Same-Day</th><th scope="col">Same-Day corrected warehouse estimate</th><th scope="col">Estimated delta</th><th scope="col">Warehouse delta</th><th scope="col">Days left</th><th scope="col">Status</th><th scope="col">Reason</th>
       </tr></thead>
       <tbody>${bodyRows}</tbody>
     </table>
@@ -361,6 +388,8 @@ function renderHtmlRow(row: FullReportRow): string {
   <td>${formatOptionalCents(row.comparisonDeltaCents)}</td>
   <td>${formatOptionalCents(row.potentialSavingsCents)}</td>
   <td>${renderHtmlPrice(row.prices.warehouse)}</td>
+  <td>${row.prices.warehouseDisplay ? renderHtmlPrice(row.prices.warehouseDisplay) : 'Unavailable'}</td>
+  <td>${row.prices.warehouseGraphql ? renderHtmlPrice(row.prices.warehouseGraphql) : 'Unavailable'}</td>
   <td>${renderHtmlPrice(row.prices.receiptHistory)}</td>
   <td>${renderHtmlPrice(row.prices.warehouseSavings)}</td>
   <td>${renderHtmlPrice(row.prices.costcoCom)}</td>
@@ -412,26 +441,26 @@ function renderSameDayEstimate(row: FullReportRow): string {
 }
 
 function renderHtmlPrice(price: ReportPriceObservation): string {
-  if (price.unitPriceCents === null) {
-    const reason = price.unavailableReason ?? 'reason unavailable';
-    if (price.promotionText === null) {
-      return `<span class="muted">Unavailable — ${escapeHtml(reason)}</span>`;
-    }
-    const details = [
-      `Promotion evidence: ${price.promotionText}`,
-      price.source,
-      price.observedAt,
-    ]
-      .filter((value): value is string => value !== null)
-      .map(escapeHtml)
-      .join('<br>');
-    return `<span class="muted">Final price unavailable — ${escapeHtml(reason)}<br>${details}</span>`;
-  }
-  const details = [price.promotionText, price.source, price.observedAt]
+  const heading =
+    price.unitPriceCents === null
+      ? (price.promotionText
+          ? 'Final price unavailable — '
+          : 'Unavailable — ') +
+        (price.unavailableReason ?? 'reason unavailable')
+      : formatCents(price.unitPriceCents);
+  const details = [
+    price.promotionText ? `Promotion evidence: ${price.promotionText}` : null,
+    price.source,
+    price.observedAt,
+    ...warehouseEvidenceDetails(price),
+  ]
     .filter((value): value is string => value !== null)
     .map(escapeHtml)
     .join('<br>');
-  return `${formatCents(price.unitPriceCents)}${details === '' ? '' : `<br><span class="muted">${details}</span>`}`;
+  return (
+    escapeHtml(heading) +
+    (details ? '<br><span class="muted">' + details + '</span>' : '')
+  );
 }
 
 function formatOptionalCents(cents: number | null): string {
@@ -465,6 +494,8 @@ function escapeHtml(value: string): string {
 
 export const REPORT_PRICE_CHANNELS: readonly PriceChannel[] = [
   'warehouse',
+  'warehouse_display',
+  'warehouse_graphql',
   'receipt_history',
   'warehouse_savings',
   'costco_com',
@@ -472,13 +503,15 @@ export const REPORT_PRICE_CHANNELS: readonly PriceChannel[] = [
 ];
 
 function validateReport(report: FullRunReport): void {
-  if (report.schemaVersion !== 2) {
-    throw new TypeError('Full report schema version 2 is required.');
+  if (report.schemaVersion !== 3) {
+    throw new TypeError('Full report schema version 3 is required.');
   }
   const expectedChannels: ReadonlyArray<
     readonly [keyof ReportPriceChannels, PriceChannel]
   > = [
     ['warehouse', 'warehouse'],
+    ['warehouseDisplay', 'warehouse_display'],
+    ['warehouseGraphql', 'warehouse_graphql'],
     ['receiptHistory', 'receipt_history'],
     ['warehouseSavings', 'warehouse_savings'],
     ['costcoCom', 'costco_com'],
@@ -487,7 +520,10 @@ function validateReport(report: FullRunReport): void {
 
   for (const row of report.rows) {
     for (const [key, expectedChannel] of expectedChannels) {
-      if (row.prices[key].channel !== expectedChannel) {
+      if (
+        row.prices[key] !== undefined &&
+        row.prices[key]!.channel !== expectedChannel
+      ) {
         throw new TypeError(
           `Report price field ${key} must use channel ${expectedChannel}.`,
         );
@@ -535,6 +571,16 @@ function validateOnlineRow(row: FullReportRow): void {
         'Costco.com report evidence outside the Costco.com channel must be not_applicable.',
       );
     }
+  }
+  for (const [key, channel] of [
+    ['warehouseDisplay', 'warehouse_display'],
+    ['warehouseGraphql', 'warehouse_graphql'],
+  ] as const) {
+    const price = row.prices[key];
+    if (price && !isCanonicalNotApplicableReportPrice(price, channel))
+      throw new TypeError(
+        'Costco.com rows cannot contain physical warehouse quotations.',
+      );
   }
   if (
     row.sameDayWarehouseEstimateCents !== null ||

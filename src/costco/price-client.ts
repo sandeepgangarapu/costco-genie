@@ -1,3 +1,4 @@
+import { PRODUCT_CLIENT_ID } from './public-storefront.js';
 import { z } from 'zod';
 
 import type {
@@ -7,6 +8,13 @@ import type {
   ReportPriceObservation,
   ReportSourceDiagnostic,
 } from '../domain/types.js';
+import { isUsableReportPriceEvidence } from '../core/price-evidence.js';
+import {
+  fetchWarehouseDisplayPrices,
+  WAREHOUSE_DISPLAY_SOURCE,
+  type WarehouseDisplayOptions,
+} from './warehouse-display-client.js';
+import { savingsReportPrice } from './warehouse-savings.js';
 import { parseMoneyToCents } from '../lib/money.js';
 import {
   fetchSameDayPrices,
@@ -16,8 +24,7 @@ import {
 
 const PRODUCT_ENDPOINT =
   'https://ecom-api.costco.com/ebusiness/product/v1/products/graphql';
-// Public Costco storefront application ID; this is not a member credential.
-const PRODUCT_CLIENT_ID = '4900eb1f-0c10-4bd9-99c3-c59e6c1ecebf';
+
 const MAX_BATCH_SIZE = 25;
 // Each unofficial HTTP batch is bounded so the parent-held run lock releases.
 const EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
@@ -57,6 +64,10 @@ export interface PriceRequest extends WarehousePriceRequest {
 }
 
 export interface WarehousePriceOptions {
+  readonly warehouseDisplayPriceFetcher?: (
+    requests: readonly WarehousePriceRequest[],
+    options: WarehouseDisplayOptions,
+  ) => Promise<Array<ReportPriceObservation & WarehousePriceRequest>>;
   readonly batchSize?: number;
   readonly createTimeoutSignal?: (timeoutMilliseconds: number) => AbortSignal;
   readonly fetchFn?: typeof fetch;
@@ -265,7 +276,10 @@ export async function fetchWarehousePrices(
       );
       return;
     }
-    if (!DIGITS.test(request.warehouseNumber)) {
+    if (
+      !DIGITS.test(request.warehouseNumber) ||
+      /^0*847$|^0+$/u.test(request.warehouseNumber)
+    ) {
       observations[index] = unresolved(
         request,
         observedAt,
@@ -325,26 +339,25 @@ export async function fetchReportPriceEvidence(
     fetchFn,
     now: () => observed,
   });
-  const sameDay =
-    warehouseRequests.length === 0
-      ? {
-          items: [],
-          diagnostic: notApplicableDiagnostic(
-            'same_day',
-            'same_day',
-            observedAt,
-          ),
-        }
-      : await fetchSameDayEvidence(warehouseRequests, options, observed);
-  const sameDayByKey = new Map(
-    sameDay.items.map((value) => [sourcePriceKey(value), value]),
+  const physicalRequests = warehouseRequests.filter(
+    (r) =>
+      DIGITS.test(r.warehouseNumber) &&
+      !/^0*847$|^0+$/u.test(r.warehouseNumber),
   );
-  const savingsRequests = warehouseRequests.filter((request) => {
-    const price = sameDayByKey.get(sourcePriceKey(request));
-    return price === undefined || !usableReportPrice(price);
-  });
+  const display =
+    physicalRequests.length === 0
+      ? []
+      : await (
+          options.warehouseDisplayPriceFetcher ?? fetchWarehouseDisplayPrices
+        )(physicalRequests, {
+          fetchFn,
+          now: () => observed,
+          timeoutMs: options.timeoutMilliseconds,
+          createTimeoutSignal: options.createTimeoutSignal,
+        });
+  // Coupon evidence is always refreshed, independently of browser success.
   const savings =
-    savingsRequests.length === 0
+    physicalRequests.length === 0
       ? {
           items: [],
           diagnostic: notApplicableDiagnostic(
@@ -354,17 +367,17 @@ export async function fetchReportPriceEvidence(
           ),
         }
       : await fetchSavingsPrices(
-          savingsRequests,
+          physicalRequests,
           observed,
           fetchFn,
-          (
-            options.createTimeoutSignal ??
-            ((milliseconds) => AbortSignal.timeout(milliseconds))
-          )(
+          (options.createTimeoutSignal ?? AbortSignal.timeout)(
             options.timeoutMilliseconds ??
               EXTERNAL_REQUEST_TIMEOUT_MILLISECONDS,
           ),
         );
+  const displayByKey = new Map(
+    display.map((value) => [sourcePriceKey(value), value]),
+  );
   const warehouseByKey = new Map(
     warehouseObservations.map((value) => [sourcePriceKey(value), value]),
   );
@@ -373,6 +386,44 @@ export async function fetchReportPriceEvidence(
   );
   const savingsByKey = new Map(
     savings.items.map((value) => [sourcePriceKey(value), value]),
+  );
+  const resolvedByKey = new Map(
+    warehouseRequests.map((request) => {
+      const key = sourcePriceKey(request);
+      const raw = warehouseByKey.get(key);
+      return [
+        key,
+        resolveWarehousePriceEvidence(
+          request,
+          displayByKey.get(key),
+          savingsByKey.get(key),
+          raw ? reportPriceFromWarehouse(raw) : undefined,
+        ),
+      ];
+    }),
+  );
+  const unresolvedRequests = warehouseRequests.filter(
+    (request) =>
+      DIGITS.test(request.itemNumber) &&
+      DIGITS.test(request.warehouseNumber) &&
+      !/^0*847$|^0+$/u.test(request.warehouseNumber) &&
+      !usableReportPrice(resolvedByKey.get(sourcePriceKey(request))!),
+  );
+  const sameDay =
+    unresolvedRequests.length === 0
+      ? {
+          items: [],
+          diagnostic: diagnostic(
+            'same_day',
+            'same_day',
+            'unavailable',
+            observedAt,
+            'Same-Day browser skipped: no unresolved physical warehouse prices.',
+          ),
+        }
+      : await fetchSameDayEvidence(unresolvedRequests, options, observed);
+  const sameDayByKey = new Map(
+    sameDay.items.map((value) => [sourcePriceKey(value), value]),
   );
   const items = uniqueRequests.map((request) => {
     const sourceKey = sourcePriceKey(request);
@@ -383,6 +434,8 @@ export async function fetchReportPriceEvidence(
         itemNumber: request.itemNumber,
         warehouseNumber: request.warehouseNumber,
         prices: {
+          warehouseDisplay: unavailable('warehouse_display', 'not_applicable'),
+          warehouseGraphql: unavailable('warehouse_graphql', 'not_applicable'),
           warehouse: unavailable('warehouse', 'not_applicable'),
           warehouseSavings: unavailable('warehouse_savings', 'not_applicable'),
           costcoCom: onlineRecord
@@ -401,27 +454,32 @@ export async function fetchReportPriceEvidence(
     const apiWarehouse = warehouse
       ? reportPriceFromWarehouse(warehouse)
       : unavailable('warehouse', 'warehouse_price_missing');
-    const currentWarehouse = usableReportPrice(apiWarehouse)
-      ? apiWarehouse
-      : usableReportPrice(savingsPrice)
-        ? {
-            ...savingsPrice,
-            channel: 'warehouse' as const,
-          }
-        : apiWarehouse;
+    const currentWarehouse = resolvedByKey.get(sourceKey)!;
     return {
       purchaseChannel: request.purchaseChannel,
       itemNumber: request.itemNumber,
       warehouseNumber: request.warehouseNumber,
       prices: {
         warehouse: currentWarehouse,
+        warehouseDisplay: displayByKey.get(sourceKey)
+          ? reportPriceOnly(displayByKey.get(sourceKey)!)
+          : unavailable('warehouse_display', 'warehouse_display_not_found'),
+        warehouseGraphql: {
+          ...apiWarehouse,
+          channel: 'warehouse_graphql' as const,
+        },
         warehouseSavings: savingsPrice,
         costcoCom: onlineRecord
           ? reportPriceOnly(onlineRecord)
           : unavailable('costco_com', 'product_not_found'),
         sameDay: sameDayByKey.get(sourceKey)
           ? reportPriceOnly(sameDayByKey.get(sourceKey)!)
-          : unavailable('same_day', 'source_not_configured'),
+          : unavailable(
+              'same_day',
+              usableReportPrice(currentWarehouse)
+                ? 'verified_warehouse_price_available'
+                : 'source_not_configured',
+            ),
       },
     };
   });
@@ -443,6 +501,21 @@ export async function fetchReportPriceEvidence(
         warehouseRequests.length === 0
           ? 'Current warehouse product lookup is not applicable.'
           : 'Current warehouse product lookup completed.',
+      ),
+      diagnostic(
+        'warehouse_display',
+        WAREHOUSE_DISPLAY_SOURCE,
+        warehouseRequests.length === 0
+          ? 'unavailable'
+          : display.some((p) =>
+                /http_|failed|timeout|malformed/u.test(
+                  p.unavailableReason ?? '',
+                ),
+              )
+            ? 'error'
+            : 'ok',
+        observedAt,
+        displayDiagnosticMessage(display),
       ),
       online.diagnostic,
       savings.diagnostic,
@@ -671,7 +744,12 @@ async function fetchSavingsPrices(
     return {
       items: requests.map((request) => ({
         ...request,
-        ...parseSavingsForItem(html, request.itemNumber, now, observedAt),
+        ...savingsReportPrice(
+          html,
+          request.itemNumber,
+          request.warehouseNumber,
+          now,
+        ),
       })),
       diagnostic: diagnostic(
         'warehouse_savings',
@@ -696,192 +774,6 @@ async function fetchSavingsPrices(
       ),
     };
   }
-}
-
-function parseSavingsForItem(
-  html: string,
-  itemNumber: string,
-  now: Date,
-  observedAt: string,
-): ReportPriceObservation {
-  const hydrated = parseHydrationSavings(html, itemNumber, now, observedAt);
-  if (hydrated !== null) return hydrated;
-
-  const articlePattern = /<article\b([^>]*)>([\s\S]*?)<\/article>/giu;
-  for (const match of html.matchAll(articlePattern)) {
-    const attributes = match[1] ?? '';
-    const text = stripHtml(match[2] ?? '');
-    if (attribute(attributes, 'data-item-number') !== itemNumber) continue;
-    const evidence = (reason: string) => ({
-      ...unavailable('warehouse_savings', reason),
-      observedAt,
-      promotionText: promotionText(text),
-      source: SAVINGS_SOURCE,
-    });
-    if (/item numbers? vary/iu.test(text))
-      return evidence('variable_item_numbers');
-    if (
-      /online\s*only/iu.test(text) ||
-      attribute(attributes, 'data-applicability') === 'online'
-    ) {
-      return evidence('online_only');
-    }
-    const startDate = attribute(attributes, 'data-start-date');
-    const endDate = attribute(attributes, 'data-end-date');
-    if (
-      !startDate ||
-      !endDate ||
-      !isCurrentDateRange(startDate, endDate, now)
-    ) {
-      return evidence('promotion_not_current');
-    }
-    if (attribute(attributes, 'data-applicability') !== 'warehouse') {
-      return evidence('warehouse_applicability_not_stated');
-    }
-    const cents = parseWirePriceToCents(
-      attribute(attributes, 'data-final-price')?.replace(/^\$/u, ''),
-    );
-    if (cents === null || cents <= 0) return evidence('final_price_not_listed');
-    return {
-      ...available('warehouse_savings', cents, SAVINGS_SOURCE, observedAt),
-      promotionText: promotionText(text),
-    };
-  }
-  return unavailable('warehouse_savings', 'item_not_advertised');
-}
-
-function parseHydrationSavings(
-  html: string,
-  itemNumber: string,
-  now: Date,
-  observedAt: string,
-): ReportPriceObservation | null {
-  const normalized = html.replaceAll('\\"', '"');
-  const marker = `"itemNumber":"${itemNumber}"`;
-  const itemIndex = normalized.indexOf(marker);
-  if (itemIndex < 0) return null;
-  const nextItem = normalized.indexOf(
-    '"itemNumber":"',
-    itemIndex + marker.length,
-  );
-  const block = normalized.slice(
-    itemIndex,
-    nextItem < 0 ? itemIndex + 12_000 : nextItem,
-  );
-  const evidence = (reason: string, promotion: string | null = null) => ({
-    ...unavailable('warehouse_savings', reason),
-    observedAt,
-    promotionText: promotion,
-    source: SAVINGS_SOURCE,
-  });
-  const applicability =
-    /"applicability":"([^"]+)"/u.exec(block)?.[1]?.toLowerCase() ?? '';
-  if (applicability === 'online' || applicability === 'online_only') {
-    return evidence('online_only');
-  }
-  if (!applicability.split('_').includes('warehouse')) {
-    return evidence('warehouse_applicability_not_stated');
-  }
-  const override = /"validDatesOverride":"([^"]+)"/u.exec(block)?.[1] ?? '';
-  const range = dateRange(override) ?? dateRange(normalized);
-  if (range === null || !isCurrentUsDateRange(range.start, range.end, now)) {
-    return evidence('promotion_not_current');
-  }
-  const price =
-    /"pricesOffCSObject":\[\{[\s\S]*?"value":\["(\d+(?:\.\d{1,2})?)"\]/u.exec(
-      block,
-    )?.[1] ?? null;
-  const append = /"append_text":"([^"]+)"/u.exec(block)?.[1]?.trim() ?? '';
-  const prepend = /"prepend_text":"([^"]+)"/u.exec(block)?.[1]?.trim() ?? '';
-  const cents = parseWirePriceToCents(price);
-  const promotion =
-    price === null
-      ? append || null
-      : `$${price}${append === '' ? '' : ` ${append}`}`;
-  if (cents === null || cents <= 0 || /^save\b/iu.test(prepend)) {
-    return evidence('final_price_not_listed', promotion);
-  }
-  return {
-    ...available('warehouse_savings', cents, SAVINGS_SOURCE, observedAt),
-    promotionText: promotion,
-  };
-}
-
-function dateRange(value: string): { start: string; end: string } | null {
-  const match =
-    /Valid\s+(\d{1,2}\/\d{1,2}\/\d{2,4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/iu.exec(
-      value,
-    );
-  return match?.[1] && match[2] ? { start: match[1], end: match[2] } : null;
-}
-
-function isCurrentUsDateRange(start: string, end: string, now: Date): boolean {
-  const startTime = parseUsDate(start, false);
-  const endTime = parseUsDate(end, true);
-  const current = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-  return (
-    startTime !== null &&
-    endTime !== null &&
-    current >= startTime &&
-    current <= endTime
-  );
-}
-
-function parseUsDate(value: string, endOfDay: boolean): number | null {
-  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/u.exec(value);
-  if (!match?.[1] || !match[2] || !match[3]) return null;
-  const month = Number(match[1]);
-  const day = Number(match[2]);
-  const shortYear = Number(match[3]);
-  const year = match[3].length === 2 ? 2000 + shortYear : shortYear;
-  const valueTime = Date.UTC(
-    year,
-    month - 1,
-    day,
-    endOfDay ? 23 : 0,
-    endOfDay ? 59 : 0,
-    endOfDay ? 59 : 0,
-  );
-  const check = new Date(valueTime);
-  return check.getUTCFullYear() === year &&
-    check.getUTCMonth() === month - 1 &&
-    check.getUTCDate() === day
-    ? valueTime
-    : null;
-}
-
-function attribute(attributes: string, name: string): string | null {
-  const match = new RegExp(`${name}\\s*=\\s*["']([^"']+)["']`, 'iu').exec(
-    attributes,
-  );
-  return match?.[1]?.trim() ?? null;
-}
-
-function stripHtml(value: string): string {
-  return value
-    .replace(/<[^>]*>/gu, ' ')
-    .replace(/\s+/gu, ' ')
-    .trim();
-}
-
-function promotionText(value: string): string | null {
-  return (
-    /(\$\d+(?:\.\d{2})?\s+after\s+\$\d+(?:\.\d{2})?\s+off)/iu.exec(
-      value,
-    )?.[1] ?? (value === '' ? null : value)
-  );
-}
-
-function isCurrentDateRange(start: string, end: string, now: Date): boolean {
-  const startTime = Date.parse(`${start}T00:00:00Z`);
-  const endTime = Date.parse(`${end}T23:59:59Z`);
-  const current = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
-  return (
-    Number.isFinite(startTime) &&
-    Number.isFinite(endTime) &&
-    current >= startTime &&
-    current <= endTime
-  );
 }
 
 function reportPriceFromWarehouse(
@@ -936,13 +828,16 @@ function unavailable(
 }
 
 function usableReportPrice(price: ReportPriceObservation): boolean {
-  return price.unitPriceCents !== null && price.unavailableReason === null;
+  return isUsableReportPriceEvidence(price, price.channel);
 }
 
 function reportPriceOnly(
   price: ReportPriceObservation,
 ): ReportPriceObservation {
   return {
+    ...(price.warehouseEvidence
+      ? { warehouseEvidence: price.warehouseEvidence }
+      : {}),
     channel: price.channel,
     observedAt: price.observedAt,
     promotionText: price.promotionText,
@@ -1006,4 +901,168 @@ function diagnostic(
   message: string,
 ): ReportSourceDiagnostic {
   return { channel, message, observedAt, source, status };
+}
+
+function displayDiagnosticMessage(
+  prices: readonly ReportPriceObservation[],
+): string {
+  const counts = new Map<string, number>();
+  for (const p of prices)
+    if (p.unavailableReason)
+      counts.set(
+        p.unavailableReason,
+        (counts.get(p.unavailableReason) ?? 0) + 1,
+      );
+  return (
+    'Warehouse display lookup completed.' +
+    [...counts]
+      .map(([reason, count]) => ' ' + reason + ' (' + count + ').')
+      .join('')
+  );
+}
+
+/** Adapted from costco-price-drop-checker/src/costco/warehouse-evidence.ts.
+ * Conflicting quotations are retained, but cannot become verified comparisons.
+ */
+export function resolveWarehousePriceEvidence(
+  request: WarehousePriceRequest,
+  display: ReportPriceObservation | undefined,
+  savings: ReportPriceObservation | undefined,
+  graphql: ReportPriceObservation | undefined,
+): ReportPriceObservation {
+  const d = display?.warehouseEvidence;
+  const b = savings?.warehouseEvidence;
+  const exactDisplay =
+    d?.warehouseNumber === request.warehouseNumber &&
+    display?.channel === 'warehouse_display';
+  const exactBooklet =
+    b?.warehouseNumber === request.warehouseNumber &&
+    savings?.channel === 'warehouse_savings';
+  const currentBooklet =
+    exactBooklet &&
+    b.scope === 'warehouse' &&
+    (savings.unavailableReason === null ||
+      savings.unavailableReason === 'final_price_not_listed');
+  const delivered =
+    exactDisplay && usableReportPrice(display!)
+      ? display!.unitPriceCents
+      : null;
+  const final = currentBooklet ? savings!.unitPriceCents : null;
+  const usableGraphql =
+    graphql?.channel === 'warehouse' && usableReportPrice(graphql);
+  let selected =
+    delivered !== null ? display : final !== null ? savings : graphql;
+  let cents =
+    delivered ?? final ?? (usableGraphql ? graphql!.unitPriceCents : null);
+  let unitBasis =
+    delivered !== null
+      ? d!.unitBasis
+      : final !== null
+        ? b!.unitBasis
+        : ('each' as const);
+  let promoEnd = selected?.warehouseEvidence?.promoEnd ?? null;
+  let handling =
+    delivered !== null
+      ? 'delivered price; no further subtraction'
+      : final !== null
+        ? 'advertised final price; no further subtraction'
+        : 'strict WH GraphQL fallback';
+  let conflict: string | null = null;
+  if (delivered !== null && currentBooklet) {
+    const discount = b!.advertisedDiscountCents;
+    if (
+      (final !== null || discount != null) &&
+      b!.unitBasis !== 'unknown' &&
+      d!.unitBasis !== 'unknown' &&
+      b!.unitBasis !== d!.unitBasis
+    ) {
+      conflict = 'warehouse_display_booklet_unit_conflict';
+    } else if (
+      d!.discountCents! > 0 &&
+      ((discount != null && discount !== d!.discountCents) ||
+        (final !== null && final !== delivered))
+    ) {
+      conflict = 'warehouse_display_booklet_final_conflict';
+    } else if (final === delivered) {
+      handling = 'booklet final equals delivered; used once';
+      promoEnd =
+        [promoEnd, b!.promoEnd].filter((v): v is string => !!v).sort()[0] ??
+        null;
+    } else if (
+      final !== null &&
+      d!.discountCents === 0 &&
+      delivered === d!.baseCents &&
+      discount != null &&
+      d!.baseCents! - discount === final
+    ) {
+      cents = final;
+      selected = savings;
+      handling =
+        'missing API promotion filled by corroborated booklet final; no subtraction from delivered';
+      promoEnd = b!.promoEnd ?? null;
+    } else if (final !== null) {
+      conflict = 'warehouse_display_booklet_final_conflict';
+    }
+  }
+  // An ambiguous current card or explicit online-only card is not bypassed by WH.
+  if (exactBooklet && b.scope === 'online_only')
+    conflict = 'warehouse_online_only_promotion';
+  if (savings?.unavailableReason === 'ambiguous_warehouse_promotions')
+    conflict = 'ambiguous_warehouse_promotions';
+  // A known rate or an untyped display quotation must not be laundered via a
+  // package booklet/WH fallback. Receipt imports do not establish actual weight.
+  if (
+    exactDisplay &&
+    (d.unitBasis === 'lb' ||
+      (d.deliveredCents !== null && d.deliveredCents !== undefined))
+  )
+    unitBasis = d.unitBasis;
+  const unitReason =
+    cents !== null && unitBasis !== 'each'
+      ? unitBasis === 'lb'
+        ? 'warehouse_per_lb_not_comparable_to_receipt_package'
+        : 'warehouse_unknown_unit_not_comparable_to_receipt_package'
+      : null;
+  let reason =
+    conflict ??
+    unitReason ??
+    (cents !== null
+      ? null
+      : (display?.unavailableReason ??
+        graphql?.unavailableReason ??
+        savings?.unavailableReason ??
+        'warehouse_price_missing'));
+  if (
+    !DIGITS.test(request.warehouseNumber) ||
+    /^0*847$|^0+$/u.test(request.warehouseNumber)
+  )
+    reason = 'invalid_physical_warehouse_scope';
+  return {
+    channel: 'warehouse',
+    unitPriceCents: reason === null ? cents : null,
+    source: selected?.source ?? display?.source ?? graphql?.source ?? null,
+    observedAt:
+      selected?.observedAt ??
+      display?.observedAt ??
+      graphql?.observedAt ??
+      null,
+    unavailableReason: reason,
+    promotionText: savings?.promotionText ?? display?.promotionText ?? null,
+    warehouseEvidence: {
+      ...d,
+      warehouseNumber: request.warehouseNumber,
+      unitBasis,
+      quotationCents: cents,
+      promoEnd,
+      bookletFinalCents: b?.bookletFinalCents ?? null,
+      advertisedDiscountCents: b?.advertisedDiscountCents ?? null,
+      bookletPromoStart: b?.promoStart ?? null,
+      bookletPromoEnd: b?.promoEnd ?? null,
+      bookletUnitBasis: b?.unitBasis,
+      bookletScope: b?.scope,
+      conflictReason: conflict,
+      unitReason,
+      discountHandling: handling,
+    },
+  };
 }

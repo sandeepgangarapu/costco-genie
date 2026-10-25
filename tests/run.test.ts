@@ -778,7 +778,7 @@ describe('runPriceCheck', () => {
         .map(({ purchaseChannel }) => purchaseChannel),
     ).toEqual(['warehouse', 'costco_com']);
     expect(reports[0]?.rows).toHaveLength(2);
-    expect(reports[0]?.schemaVersion).toBe(2);
+    expect(reports[0]?.schemaVersion).toBe(3);
     expect(
       reports[0]?.rows.find(
         ({ purchase }) => purchase.purchaseChannel === 'warehouse',
@@ -812,6 +812,7 @@ describe('runPriceCheck', () => {
 
   it('pairs evidence by channel when warehouse and Costco.com share an item and scope', async () => {
     const reports: FullRunReport[] = [];
+    const sharedOnlinePurchase = { ...ONLINE_PURCHASE, warehouseNumber: '123' };
     const warehouseReceipt = {
       ...LIVE_RECEIPT,
       couponArray: [],
@@ -819,11 +820,11 @@ describe('runPriceCheck', () => {
         {
           amount: '30.00',
           itemDescription01: 'Warehouse Coffee',
-          itemNumber: ONLINE_PURCHASE.itemNumber,
+          itemNumber: sharedOnlinePurchase.itemNumber,
           unit: '1',
         },
       ],
-      warehouseNumber: ONLINE_PURCHASE.warehouseNumber,
+      warehouseNumber: sharedOnlinePurchase.warehouseNumber,
     };
     const deps = dependencies({
       fetchEvidence: async (requests) => ({
@@ -861,7 +862,7 @@ describe('runPriceCheck', () => {
           status: 'ok',
         },
         failedDetailBatches: 0,
-        purchases: [ONLINE_PURCHASE],
+        purchases: [sharedOnlinePurchase],
       }),
       fetchReceipts: async () => [warehouseReceipt],
       writeReport: async (report) => {
@@ -2782,3 +2783,157 @@ describe('runPriceCheck', () => {
     deps.database.close();
   });
 });
+
+it('compares a reconciled booklet final with net receipt payment and carries evidence through DB, report and weekly email', async () => {
+  const { fetchReportPriceEvidence } =
+    await import('../src/costco/price-client.js');
+  const reports: FullRunReport[] = [];
+  const sameDayPriceFetcher = vi.fn(async () => []);
+  const deps = dependencies({
+    config: { ...DEFAULT_CONFIG, emailEveryRun: true },
+    fetchEvidence: async (requests, options) =>
+      fetchReportPriceEvidence(requests, {
+        ...options,
+        sameDayPriceFetcher,
+        fetchFn: async (input) => {
+          if (String(input).includes('/warehouse-savings'))
+            return new Response(
+              `<article data-item-number="${requests[0].itemNumber}" data-start-date="2026-08-01" data-end-date="2026-08-31" data-applicability="warehouse" data-final-price="6.99">$6.99 After $3.00 OFF</article>`,
+            );
+          if (String(input).includes('/display-price-lite'))
+            return Response.json({
+              priceData: requests.map((r) => ({
+                id: r.itemNumber,
+                displayPrice: [
+                  {
+                    warehouseNumber: r.warehouseNumber,
+                    currency: 'USD',
+                    onlinePrice: '9.99',
+                    aggregatedDiscountAmt: 0,
+                    deliveredPrice: '9.99',
+                    uom: 'EA',
+                  },
+                ],
+              })),
+            });
+          return Response.json({ data: { products: { catalogData: [] } } });
+        },
+      }),
+    writeReport: async (report) => {
+      reports.push(report);
+      return {
+        htmlFile: '/reports/synthetic.html',
+        csvFile: '/reports/synthetic.csv',
+        jsonFile: '/reports/synthetic.json',
+      };
+    },
+  });
+  const result = await runPriceCheck(deps, { now: () => NOW });
+  expect(result.candidatesFound).toBe(1);
+  expect(result.estimatedOpportunitiesFound ?? 0).toBe(0);
+  expect(sameDayPriceFetcher).not.toHaveBeenCalled();
+  expect(reports[0].rows[0]).toMatchObject({
+    purchase: { grossUnitCents: 999, paidUnitCents: 899 },
+    comparisonUnitCents: 699,
+    comparisonDeltaCents: 200,
+    potentialSavingsCents: 400,
+    status: 'candidate',
+    prices: {
+      warehouse: {
+        warehouseEvidence: {
+          baseCents: 999,
+          discountCents: 0,
+          deliveredCents: 999,
+          bookletFinalCents: 699,
+        },
+      },
+    },
+  });
+  expect(
+    deps.database.latestPriceObservations()[0].warehouseEvidence,
+  ).toMatchObject({ baseCents: 999, bookletFinalCents: 699 });
+  expect(deps.mailNotifier.messages[0].text).toContain('Base: $9.99');
+  expect(deps.mailNotifier.messages[0].text).toContain('Booklet final: $6.99');
+  expect(deps.mailNotifier.messages[0].html).toContain(
+    'Promotion ends: 2026-08-31',
+  );
+  deps.database.close();
+});
+
+it.each(['lb', 'unknown'] as const)(
+  'keeps %s display units out of verified candidates and shows the reason in the weekly email',
+  async (unitBasis) => {
+    const { resolveWarehousePriceEvidence } =
+      await import('../src/costco/price-client.js');
+    const reports: FullRunReport[] = [];
+    const deps = dependencies({
+      config: { ...DEFAULT_CONFIG, emailEveryRun: true },
+      fetchEvidence: async (requests) => ({
+        diagnostics: [],
+        items: requests.map((request) => {
+          const raw: ReportPriceObservation = {
+            ...availableReportPrice('warehouse_display', 100),
+            source: 'warehouse_display_price_api',
+            warehouseEvidence: {
+              warehouseNumber: request.warehouseNumber,
+              unitBasis,
+              baseCents: 100,
+              discountCents: 0,
+              deliveredCents: 100,
+            },
+          };
+          return {
+            ...request,
+            prices: {
+              warehouse: resolveWarehousePriceEvidence(
+                request,
+                raw,
+                undefined,
+                undefined,
+              ),
+              warehouseDisplay: raw,
+              warehouseSavings: unavailableReportPrice('warehouse_savings'),
+              costcoCom: unavailableReportPrice('costco_com'),
+              sameDay: {
+                ...availableReportPrice('same_day', 500),
+                source: 'same_day_guest_storefront',
+              },
+            },
+          };
+        }),
+      }),
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/synthetic.html',
+          csvFile: '/reports/synthetic.csv',
+          jsonFile: '/reports/synthetic.json',
+        };
+      },
+    });
+    const result = await runPriceCheck(deps, { now: () => NOW });
+    expect(result.candidatesFound).toBe(0);
+    expect(result.estimatedOpportunitiesFound).toBe(1);
+    expect(deps.database.latestPriceObservations()).toEqual([]);
+    expect(reports[0].rows[0]).toMatchObject({
+      status: 'estimated_opportunity',
+      comparisonChannel: 'same_day',
+      prices: {
+        warehouse: {
+          unitPriceCents: null,
+          warehouseEvidence: {
+            unitBasis,
+            unitReason: expect.stringContaining('not_comparable'),
+          },
+        },
+      },
+    });
+    expect(deps.mailNotifier.messages[0].text).toContain(
+      'not_comparable_to_receipt_package',
+    );
+    expect(deps.mailNotifier.messages[0].html).toContain(
+      'not_comparable_to_receipt_package',
+    );
+    deps.database.close();
+  },
+);

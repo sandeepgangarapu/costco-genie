@@ -109,7 +109,7 @@ describe('renderWeeklyReportEmail', () => {
       ...candidate.purchase,
       description: 'Seaweed Sticks',
       id: 'purchase-2',
-      itemNumber: '2066942',
+      itemNumber: '980004',
       paidUnitCents: 597,
     };
     const unavailableOnline = {
@@ -138,7 +138,7 @@ describe('renderWeeklyReportEmail', () => {
     expect(body).toContain(
       '| Test Butter (item #100001, WH 123) | $10.00 | ~$8.00 | ~$2.00 | Sep 27, 2026 | 5 days | Same-Day estimate |',
     );
-    expect(body).not.toContain('Item 2066942');
+    expect(body).not.toContain('Item 980004');
     expect(body).not.toContain('Item 1937995');
     expect(body).toContain('Items considered: 3');
     expect(body).toContain('Prices found: 1 of 3 (0 verified; 1 Same-Day)');

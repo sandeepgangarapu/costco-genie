@@ -314,7 +314,7 @@ describe('fetchSameDayPrices', () => {
     );
 
     const [price] = await fetchSameDayPrices(
-      [{ itemNumber: '1284156', warehouseNumber: '110' }],
+      [{ itemNumber: '1284156', warehouseNumber: '321' }],
       { launchBrowser: async () => browser, now: () => new Date(observedAt) },
     );
 
@@ -352,7 +352,7 @@ describe('fetchSameDayPrices', () => {
     const request = {
       description: 'KS ORG EVOO',
       itemNumber: '692731',
-      warehouseNumber: '110',
+      warehouseNumber: '321',
     };
 
     const [price] = await fetchSameDayPrices([request], {
@@ -396,7 +396,7 @@ describe('fetchSameDayPrices', () => {
         {
           description: 'KS ORG EVOO',
           itemNumber: '692731',
-          warehouseNumber: '110',
+          warehouseNumber: '321',
         },
       ],
       { launchBrowser: async () => browser, now: () => new Date(observedAt) },
@@ -432,7 +432,7 @@ describe('fetchSameDayPrices', () => {
         {
           description: 'KS ORG EVOO',
           itemNumber: '692731',
-          warehouseNumber: '110',
+          warehouseNumber: '321',
         },
       ],
       { launchBrowser: async () => browser, now: () => new Date(observedAt) },
@@ -584,7 +584,7 @@ describe('fetchSameDayPrices', () => {
     );
 
     const [price] = await fetchSameDayPrices(
-      [{ itemNumber: '1753490', warehouseNumber: '110' }],
+      [{ itemNumber: '1753490', warehouseNumber: '321' }],
       { launchBrowser: async () => browser, now: () => new Date(observedAt) },
     );
 
@@ -614,7 +614,7 @@ describe('fetchSameDayPrices', () => {
     const browser = browserWithPages([stalledPage], events);
 
     const [price] = await fetchSameDayPrices(
-      [{ itemNumber: '1753490', warehouseNumber: '110' }],
+      [{ itemNumber: '1753490', warehouseNumber: '321' }],
       {
         launchBrowser: async () => browser,
         now: () => new Date(observedAt),
@@ -655,8 +655,8 @@ describe('fetchSameDayPrices', () => {
 
     const prices = await fetchSameDayPrices(
       [
-        { itemNumber: '1753490', warehouseNumber: '110' },
-        { itemNumber: '1864962', warehouseNumber: '110' },
+        { itemNumber: '1753490', warehouseNumber: '321' },
+        { itemNumber: '1864962', warehouseNumber: '321' },
       ],
       {
         launchBrowser: async () => browser,

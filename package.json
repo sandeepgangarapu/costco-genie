@@ -17,7 +17,8 @@
     "format:check": "prettier --check src tests scripts README.md AGENTS.md package.json tsconfig.json vitest.config.ts eslint.config.js .prettierrc.json",
     "build": "tsc && chmod +x dist/cli.js",
     "probe:live-price": "node --import tsx scripts/live-price-probe.ts",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "probe:warehouse-coverage": "node --import tsx scripts/warehouse-coverage-probe.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
