@@ -749,7 +749,7 @@ it('serializes quarantined display/booklet conflicts and unit reasons in schema 
     quotationCents: 1700,
     promoEnd: '2026-10-31',
     conflictReason: 'warehouse_display_booklet_final_conflict',
-    unitReason: 'warehouse_unknown_unit_not_comparable_to_receipt_package',
+    unitReason: 'warehouse_possible_unit_mismatch',
   };
   const warehouse: ReportPriceObservation = {
     channel: 'warehouse',
@@ -800,4 +800,37 @@ it('serializes quarantined display/booklet conflicts and unit reasons in schema 
   expect(html).toContain('Base: $20.00');
   expect(html).toContain('API delivered final: $17.00');
   expect(html).toContain('Costco warehouse display price');
+});
+
+it('labels assumed package comparisons in muted full-report evidence and JSON', async () => {
+  const original = sampleReport();
+  const row = original.rows[0]!;
+  const report: FullRunReport = {
+    ...original,
+    rows: [
+      {
+        ...row,
+        prices: {
+          ...row.prices,
+          warehouse: {
+            ...row.prices.warehouse,
+            warehouseEvidence: {
+              warehouseNumber: row.purchase.warehouseNumber,
+              unitBasis: 'unknown',
+              comparisonBasis: 'assumed_package',
+            },
+          },
+        },
+      },
+    ],
+  };
+  const files = await writeFullReport(appPaths(createTemporaryHome()), report);
+  const html = readFileSync(files.htmlFile, 'utf8');
+  expect(html).toMatch(
+    /<span class="muted">[^<]*(?:<br>[^<]*)*Comparison: assumed package price \(unit not stated\)/u,
+  );
+  expect(
+    JSON.parse(readFileSync(files.jsonFile, 'utf8')).rows[0].prices.warehouse
+      .warehouseEvidence,
+  ).toMatchObject({ comparisonBasis: 'assumed_package' });
 });

@@ -182,7 +182,7 @@ describe('warehouse display and booklet reconciliation', () => {
       source: 'warehouse-price-api',
     });
   });
-  it.each(['lb', 'unknown'] as const)(
+  it.each(['lb'] as const)(
     'blocks %s units against receipt packages even with a cheaper WH fallback',
     (unitBasis) => {
       expect(reconcile(display({ unitBasis }), booklet())).toMatchObject({
@@ -337,7 +337,7 @@ describe('fetchReportPriceEvidence source precedence (offline integration)', () 
       sameDayPriceFetcher.mock.calls[0][0].map(
         (r: PriceRequest) => r.itemNumber,
       ),
-    ).toEqual(['900001', '900002', '900004']);
+    ).toEqual(['900001', '900004']);
     expect(n.savingsCalls()).toBe(1);
     expect(result.items[2].prices.warehouse.unitPriceCents).toBe(2000);
     expect(result.items[0].prices.warehouseDisplay?.unitPriceCents).toBe(1700);
@@ -469,7 +469,7 @@ it('retains an expired booklet final as evidence without applying it', () => {
 
 it('rejects malformed coupon date overrides instead of using the global period', () => {
   const html =
-    '<p>Valid 10/1/26 - 10/31/26</p><script>{"itemNumber":"900001","applicability":"warehouse","validDatesOverride":"unconfirmed","pricesOffCSObject":[{"value":["17.00"]}]}</script>';
+    '<p>Valid 10/1/26 - 10/31/26</p><script>{"itemNumber":"900001","applicability":"warehouse","validDatesOverride":"Valid 10/99/26 - 10/31/26","pricesOffCSObject":[{"value":["17.00"]}]}</script>';
   expect(booklet(html)).toMatchObject({
     unitPriceCents: null,
     unavailableReason: 'promotion_not_current',

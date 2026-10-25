@@ -10,6 +10,10 @@ import type {
 } from '../domain/types.js';
 import { isUsableReportPriceEvidence } from '../core/price-evidence.js';
 import {
+  indicatesVariableWeight,
+  possibleWarehouseUnitMismatch,
+} from '../core/warehouse-units.js';
+import {
   fetchWarehouseDisplayPrices,
   WAREHOUSE_DISPLAY_SOURCE,
   type WarehouseDisplayOptions,
@@ -49,12 +53,16 @@ const catalogProductSchema = z.object({
   itemNumber: z.string(),
   priceData: z.object({ price: z.unknown().optional() }).optional(),
   programTypes: z.union([z.string(), z.array(z.string())]).optional(),
+  description: z.unknown().optional(),
+  attributes: z.unknown().optional(),
 });
 
 const catalogItemSchema = z.object({ itemNumber: z.string() });
 
 export interface WarehousePriceRequest {
   readonly description?: string;
+  readonly paidUnitCents?: number;
+  readonly receiptVariableWeight?: boolean;
   readonly itemNumber: string;
   readonly warehouseNumber: string;
 }
@@ -129,6 +137,8 @@ function productQuery(
       catalogData {
         itemNumber
         programTypes
+        description { shortDescription }
+        attributes { key value }
         priceData { price }
       }
       fulfillmentData { itemNumber warehouseNumber }
@@ -160,23 +170,71 @@ function mapProduct(
   }
 
   const product = catalogProductSchema.parse(rawProduct);
+  const variableWeight = catalogVariableWeight(product);
+  const withMetadata = (price: PriceObservation): PriceObservation =>
+    variableWeight
+      ? {
+          ...price,
+          warehouseEvidence: {
+            warehouseNumber: indexed.request.warehouseNumber,
+            unitBasis: 'each',
+            variableWeight: true,
+            unitReason:
+              'warehouse_catalog_variable_weight_not_comparable_to_receipt_package',
+          },
+        }
+      : price;
   if (!hasWarehouseProgram(product.programTypes)) {
-    return unresolved(indexed.request, observedAt, 'not_warehouse_price');
+    return withMetadata(
+      unresolved(indexed.request, observedAt, 'not_warehouse_price'),
+    );
   }
 
   const cents = parseWirePriceToCents(product.priceData?.price);
   if (cents === null || cents <= 0) {
-    return unresolved(indexed.request, observedAt, 'invalid_price');
+    return withMetadata(
+      unresolved(indexed.request, observedAt, 'invalid_price'),
+    );
   }
 
-  return {
+  return withMetadata({
     itemNumber: indexed.request.itemNumber,
     observedAt,
     source: SOURCE,
     unitPriceCents: cents,
     unresolvedReason: null,
     warehouseNumber: indexed.request.warehouseNumber,
-  };
+  });
+}
+
+function catalogVariableWeight(
+  product: z.infer<typeof catalogProductSchema>,
+): boolean {
+  const description = z
+    .object({ shortDescription: z.string().nullish() })
+    .safeParse(product.description);
+  if (
+    description.success &&
+    indicatesVariableWeight(description.data.shortDescription ?? '')
+  )
+    return true;
+  if (!Array.isArray(product.attributes)) return false;
+  return product.attributes.some((raw) => {
+    const attribute = z
+      .object({ key: z.string(), value: z.unknown() })
+      .safeParse(raw);
+    if (!attribute.success) return false;
+    const { key, value } = attribute.data;
+    const values = Array.isArray(value) ? value : [value];
+    return values.some((v) => {
+      if (indicatesVariableWeight(String(v))) return true;
+      const flag = key.replace(/[\s_-]/gu, '').toLowerCase();
+      return (
+        /^(?:is)?(?:variableweight|randomweight|catchweight)$/u.test(flag) &&
+        /^(?:true|yes|y|1)$/iu.test(String(v))
+      );
+    });
+  });
 }
 
 function parseWirePriceToCents(value: unknown): number | null {
@@ -779,22 +837,28 @@ async function fetchSavingsPrices(
 function reportPriceFromWarehouse(
   observation: PriceObservation,
 ): ReportPriceObservation {
-  return observation.unitPriceCents !== null &&
-    observation.unresolvedReason === null
-    ? available(
-        'warehouse',
-        observation.unitPriceCents,
-        observation.source,
-        observation.observedAt,
-      )
-    : {
-        ...unavailable(
+  const price =
+    observation.unitPriceCents !== null && observation.unresolvedReason === null
+      ? available(
           'warehouse',
-          observation.unresolvedReason ?? 'invalid_warehouse_price',
-        ),
-        observedAt: observation.observedAt,
-        source: observation.source,
-      };
+          observation.unitPriceCents,
+          observation.source,
+          observation.observedAt,
+        )
+      : {
+          ...unavailable(
+            'warehouse',
+            observation.unresolvedReason ?? 'invalid_warehouse_price',
+          ),
+          observedAt: observation.observedAt,
+          source: observation.source,
+        };
+  return {
+    ...price,
+    ...(observation.warehouseEvidence
+      ? { warehouseEvidence: observation.warehouseEvidence }
+      : {}),
+  };
 }
 
 function available(
@@ -869,8 +933,18 @@ function deduplicatePriceRequests(
     const key = evidenceKey(request);
     const description =
       request.description?.trim() || unique.get(key)?.description;
+    const previous = unique.get(key);
+    const paid = [request.paidUnitCents, previous?.paidUnitCents].filter(
+      (v): v is number => v !== undefined && Number.isSafeInteger(v) && v > 0,
+    );
+    const variableWeight =
+      request.receiptVariableWeight ||
+      previous?.receiptVariableWeight ||
+      indicatesVariableWeight(request.description ?? '');
     unique.set(key, {
       ...(description === undefined ? {} : { description }),
+      ...(paid.length ? { paidUnitCents: Math.max(...paid) } : {}),
+      ...(variableWeight ? { receiptVariableWeight: true } : {}),
       itemNumber: request.itemNumber,
       purchaseChannel: request.purchaseChannel,
       warehouseNumber: request.warehouseNumber,
@@ -1009,20 +1083,30 @@ export function resolveWarehousePriceEvidence(
     conflict = 'warehouse_online_only_promotion';
   if (savings?.unavailableReason === 'ambiguous_warehouse_promotions')
     conflict = 'ambiguous_warehouse_promotions';
-  // A known rate or an untyped display quotation must not be laundered via a
-  // package booklet/WH fallback. Receipt imports do not establish actual weight.
+  // Known rates cannot be laundered through a package booklet/WH fallback.
   if (
-    exactDisplay &&
-    (d.unitBasis === 'lb' ||
-      (d.deliveredCents !== null && d.deliveredCents !== undefined))
+    (exactDisplay && d.unitBasis === 'lb') ||
+    (exactBooklet && b.unitBasis === 'lb')
   )
-    unitBasis = d.unitBasis;
+    unitBasis = 'lb';
+  const catalogVariable = graphql?.warehouseEvidence?.variableWeight === true;
+  const receiptVariable =
+    request.receiptVariableWeight ||
+    indicatesVariableWeight(request.description ?? '');
+  const bookletVariable = exactBooklet && b.variableWeight === true;
   const unitReason =
-    cents !== null && unitBasis !== 'each'
-      ? unitBasis === 'lb'
-        ? 'warehouse_per_lb_not_comparable_to_receipt_package'
-        : 'warehouse_unknown_unit_not_comparable_to_receipt_package'
-      : null;
+    unitBasis === 'lb'
+      ? 'warehouse_per_lb_not_comparable_to_receipt_package'
+      : catalogVariable
+        ? 'warehouse_catalog_variable_weight_not_comparable_to_receipt_package'
+        : receiptVariable
+          ? 'warehouse_receipt_variable_weight_not_comparable_to_receipt_package'
+          : bookletVariable
+            ? 'warehouse_booklet_variable_weight_not_comparable_to_receipt_package'
+            : cents !== null &&
+                possibleWarehouseUnitMismatch(cents, request.paidUnitCents)
+              ? 'warehouse_possible_unit_mismatch'
+              : null;
   let reason =
     conflict ??
     unitReason ??
@@ -1052,6 +1136,17 @@ export function resolveWarehousePriceEvidence(
       ...d,
       warehouseNumber: request.warehouseNumber,
       unitBasis,
+      ...(unitReason === null
+        ? {
+            comparisonBasis:
+              unitBasis === 'unknown'
+                ? ('assumed_package' as const)
+                : ('package' as const),
+          }
+        : {}),
+      ...(catalogVariable || receiptVariable || bookletVariable
+        ? { variableWeight: true }
+        : {}),
       quotationCents: cents,
       promoEnd,
       bookletFinalCents: b?.bookletFinalCents ?? null,

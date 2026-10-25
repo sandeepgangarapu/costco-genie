@@ -108,6 +108,8 @@ export interface WarehousePriceEvidence {
   readonly quotationCents?: number | null;
   readonly currency?: string | null;
   readonly unitBasis: UnitBasis;
+  readonly comparisonBasis?: 'package' | 'assumed_package';
+  readonly variableWeight?: boolean;
   readonly promotions?: readonly WarehousePromotion[];
   readonly promoStart?: string | null;
   readonly promoEnd?: string | null;

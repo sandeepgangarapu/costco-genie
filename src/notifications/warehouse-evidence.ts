@@ -28,8 +28,14 @@ export function warehouseEvidenceDetails(price: {
     ...amount('API discount', e.discountCents),
     ...amount('API delivered final', e.deliveredCents),
     ...amount('Booklet final', e.bookletFinalCents),
+    ...(e.unitReason || e.conflictReason
+      ? amount('Quotation for review', e.quotationCents)
+      : []),
     ...(e.promoEnd ? [`Promotion ends: ${e.promoEnd}`] : []),
     `Unit: ${e.unitBasis}`,
+    ...(e.comparisonBasis === 'assumed_package'
+      ? ['Comparison: assumed package price (unit not stated)']
+      : []),
     ...(e.discountHandling ? [e.discountHandling] : []),
     ...(e.conflictReason ? [`Review: ${e.conflictReason}`] : []),
     ...(e.unitReason ? [`Unit reason: ${e.unitReason}`] : []),

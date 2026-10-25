@@ -289,6 +289,7 @@ describe('createDefaultCliActions composition', () => {
     expect(priceRequests).toEqual([
       {
         description: 'Composed item',
+        paidUnitCents: 1999,
         itemNumber: '100978861',
         purchaseChannel: 'warehouse',
         warehouseNumber: '129',

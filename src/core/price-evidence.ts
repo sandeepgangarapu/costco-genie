@@ -9,7 +9,10 @@ function comparableWarehouseEvidence(
 ): boolean {
   return (
     evidence === undefined ||
-    (evidence.unitBasis === 'each' &&
+    ((evidence.unitBasis === 'each' ||
+      (evidence.unitBasis === 'unknown' &&
+        evidence.comparisonBasis === 'assumed_package')) &&
+      !evidence.variableWeight &&
       evidence.scope !== 'online_only' &&
       evidence.bookletScope !== 'online_only' &&
       !evidence.conflictReason &&

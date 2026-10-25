@@ -2,6 +2,7 @@ import type { AppConfig } from '../config/config.js';
 import { selectAlerts, type AlertSelection } from '../core/alert-policy.js';
 import { findAdjustments, findOnlineAdjustments } from '../core/matcher.js';
 import { normalizeReceipts } from '../core/normalize-receipts.js';
+import { indicatesVariableWeight } from '../core/warehouse-units.js';
 import {
   isUsableOnlinePriceEvidence,
   isUsableReportPriceEvidence,
@@ -1206,6 +1207,7 @@ function addDelivered(
 function uniquePriceRequests(
   purchases: readonly {
     description?: string;
+    paidUnitCents: number;
     itemNumber: string;
     purchaseChannel: import('../domain/types.js').PurchaseChannel;
     warehouseNumber: string;
@@ -1216,8 +1218,18 @@ function uniquePriceRequests(
     const key = `${purchase.purchaseChannel}\u0000${purchase.itemNumber}\u0000${purchase.warehouseNumber}`;
     const description =
       purchase.description?.trim() || requests.get(key)?.description;
+    const previous = requests.get(key);
     requests.set(key, {
       ...(description === undefined ? {} : { description }),
+      paidUnitCents: Math.max(
+        purchase.paidUnitCents,
+        previous?.paidUnitCents ?? 0,
+      ),
+      // Keep positive evidence from any receipt when requests share an item/scope.
+      ...(indicatesVariableWeight(purchase.description ?? '') ||
+      previous?.receiptVariableWeight
+        ? { receiptVariableWeight: true }
+        : {}),
       itemNumber: purchase.itemNumber,
       purchaseChannel: purchase.purchaseChannel,
       warehouseNumber: purchase.warehouseNumber,

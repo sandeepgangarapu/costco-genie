@@ -1,6 +1,7 @@
 // Adapted from costco-price-drop-checker/src/costco/savings.ts (multi-item cards).
 import type { UnitBasis, ReportPriceObservation } from '../domain/types.js';
 import { wireCents, warehouseUnitBasis } from './warehouse-display-client.js';
+import { indicatesVariableWeight } from '../core/warehouse-units.js';
 export const SAVINGS_URL = 'https://www.costco.com/o/-/warehouse-savings';
 export interface SavingsPrice {
   cents: number | null;
@@ -11,6 +12,7 @@ export interface SavingsPrice {
   promotion: string | null;
   advertisedDiscountCents: number | null;
   unitBasis: UnitBasis;
+  variableWeight: boolean;
   scope: 'warehouse' | 'online_only' | 'unknown';
 }
 const missing = (reason: string): SavingsPrice => ({
@@ -22,6 +24,7 @@ const missing = (reason: string): SavingsPrice => ({
   promotion: null,
   advertisedDiscountCents: null,
   unitBasis: 'unknown',
+  variableWeight: false,
   scope: 'unknown',
 });
 export function currentRange(start: string, end: string, now: Date): boolean {
@@ -82,6 +85,7 @@ function normalize(
   dates: { start: string; end: string } | null,
   final: number | null,
   now: Date,
+  unitText = text,
 ): SavingsPrice {
   const scope =
     /online\s*only|online_only/iu.test(`${applicability} ${text}`) ||
@@ -107,20 +111,12 @@ function normalize(
     promoEnd: dates?.end ?? null,
     promotion: text || null,
     advertisedDiscountCents: advertisedDiscount(text),
-    // An explicit booklet final is an exact-item package quotation, unless
-    // the card states a rate/variable quantity. Untyped API rates stay unknown.
-    unitBasis:
-      warehouseUnitBasis(null, null, text) === 'lb'
-        ? 'lb'
-        : final !== null &&
-            !/variable|random|average|avg\.?\s*w|per\s+(?:oz|kg|gallon)/iu.test(
-              text,
-            )
-          ? 'each'
-          : 'unknown',
+    unitBasis: warehouseUnitBasis(null, null, unitText),
+    variableWeight: indicatesVariableWeight(unitText),
     scope,
   };
 }
+
 export function parseSavingsForItem(
   html: string,
   item: string,
@@ -157,6 +153,14 @@ export function parseSavingsForItem(
       dates,
       /^save\b/iu.test(prepend) ? null : wireCents(price),
       now,
+      text +
+        ' ' +
+        ['cardDescription', 'offerDetails', 'offerTerms']
+          .map(
+            (key) =>
+              new RegExp(`"${key}":"([^"]*)"`, 'u').exec(block)?.[1] ?? '',
+          )
+          .join(' '),
     );
     // A shared item list is safe only when the card has one explicit amount.
     // Do not assign one variant's price to every item on a multi-price card.
@@ -238,6 +242,7 @@ export function savingsReportPrice(
     warehouseEvidence: {
       warehouseNumber,
       unitBasis: price.unitBasis,
+      ...(price.variableWeight ? { variableWeight: true } : {}),
       promoStart: price.promoStart,
       promoEnd: price.promoEnd,
       scope: price.scope,

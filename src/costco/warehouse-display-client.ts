@@ -121,8 +121,8 @@ export function warehouseUnitBasis(
 ): UnitBasis {
   const unit = typeof uom === 'string' ? uom.trim().toLowerCase() : '';
   const perPound = /per\s+(?:pound|lb)\b|\/\s*lb\b/iu.test(text);
-  if (factor != null && factor !== 1 && factor !== '1') return 'unknown';
   if (/^(?:lb|lbs|pound|pounds)$/u.test(unit) || perPound) return 'lb';
+  if (factor != null && factor !== 1 && factor !== '1') return 'unknown';
   if (
     /^(?:ea|each)$/u.test(unit) &&
     (factor == null || factor === 1 || factor === '1')

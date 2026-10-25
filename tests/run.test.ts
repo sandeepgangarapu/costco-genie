@@ -749,12 +749,14 @@ describe('runPriceCheck', () => {
     expect(priceRequests).toEqual([
       {
         description: 'Kirkland Trail Mix',
+        paidUnitCents: 899,
         itemNumber: '100978861',
         purchaseChannel: 'warehouse',
         warehouseNumber: '129',
       },
       {
         description: 'Costco.com Coffee',
+        paidUnitCents: 2000,
         itemNumber: '200001',
         purchaseChannel: 'costco_com',
         warehouseNumber: '847',
@@ -2065,6 +2067,7 @@ describe('runPriceCheck', () => {
     expect(receivedRequests).toEqual([
       {
         description: 'Kirkland Trail Mix',
+        paidUnitCents: 899,
         itemNumber: '100978861',
         purchaseChannel: 'warehouse',
         warehouseNumber: '129',
@@ -2153,6 +2156,7 @@ describe('runPriceCheck', () => {
     expect(receivedRequests).toEqual([
       {
         description: 'KS ORG EVOO',
+        paidUnitCents: 1998,
         itemNumber: '692731',
         purchaseChannel: 'warehouse',
         warehouseNumber: '129',
@@ -2860,9 +2864,12 @@ it('compares a reconciled booklet final with net receipt payment and carries evi
   deps.database.close();
 });
 
-it.each(['lb', 'unknown'] as const)(
-  'keeps %s display units out of verified candidates and shows the reason in the weekly email',
-  async (unitBasis) => {
+it.each([
+  ['lb', 'warehouse_per_lb_not_comparable_to_receipt_package'],
+  ['unknown', 'warehouse_possible_unit_mismatch'],
+] as const)(
+  'keeps unsafe %s display quotations out of verified candidates and shows %s in the weekly email',
+  async (unitBasis, reason) => {
     const { resolveWarehousePriceEvidence } =
       await import('../src/costco/price-client.js');
     const reports: FullRunReport[] = [];
@@ -2923,17 +2930,116 @@ it.each(['lb', 'unknown'] as const)(
           unitPriceCents: null,
           warehouseEvidence: {
             unitBasis,
-            unitReason: expect.stringContaining('not_comparable'),
+            unitReason: reason,
           },
         },
       },
     });
-    expect(deps.mailNotifier.messages[0].text).toContain(
-      'not_comparable_to_receipt_package',
-    );
-    expect(deps.mailNotifier.messages[0].html).toContain(
-      'not_comparable_to_receipt_package',
-    );
+    expect(deps.mailNotifier.messages[0].text).toContain(reason);
+    expect(deps.mailNotifier.messages[0].html).toContain(reason);
+    deps.database.close();
+  },
+);
+
+it.each([
+  ['Synthetic packaged item', 600, null],
+  ['Synthetic packaged item', 500, null],
+  ['Synthetic packaged item', 499, 'warehouse_possible_unit_mismatch'],
+  [
+    'Synthetic roast avg wt 3 lbs',
+    600,
+    'warehouse_receipt_variable_weight_not_comparable_to_receipt_package',
+  ],
+] as const)(
+  'uses normalized net receipt payment for unknown-unit quotation %s at %s cents',
+  async (description, quotationCents, reason) => {
+    const { fetchReportPriceEvidence } =
+      await import('../src/costco/price-client.js');
+    const sameDayPriceFetcher = vi.fn(async () => []);
+    const reports: FullRunReport[] = [];
+    const deps = dependencies({
+      config: {
+        ...DEFAULT_CONFIG,
+        sameDayPostalCode: '10001',
+        sameDayRepresentativeAddress:
+          '123 Example Street, Sample City, NY 10001',
+      },
+      fetchReceipts: async () => [
+        {
+          ...LIVE_RECEIPT,
+          warehouseNumber: '123',
+          itemArray: [
+            {
+              itemNumber: '900991',
+              itemDescription01: description,
+              amount: '20.00',
+              itemUnitPriceAmount: '20.00',
+              unit: '1',
+            },
+          ],
+          couponArray: [
+            {
+              amountCoupon: '-10.00',
+              associatedItemNumber: '900991',
+              unitCoupon: '1',
+            },
+          ],
+        },
+      ],
+      fetchEvidence: (requests, options) =>
+        fetchReportPriceEvidence(requests, {
+          ...options,
+          sameDayPriceFetcher,
+          fetchFn: async (input) =>
+            String(input).includes('/warehouse-savings')
+              ? new Response('<p>No offers</p>')
+              : Response.json({ data: { products: { catalogData: [] } } }),
+          warehouseDisplayPriceFetcher: async (requests) =>
+            requests.map((request) => ({
+              ...request,
+              ...availableReportPrice('warehouse_display', quotationCents),
+              source: 'warehouse_display_price_api',
+              warehouseEvidence: {
+                warehouseNumber: request.warehouseNumber,
+                unitBasis: 'unknown',
+                baseCents: quotationCents,
+                discountCents: 0,
+                deliveredCents: quotationCents,
+              },
+            })),
+        }),
+      writeReport: async (report) => {
+        reports.push(report);
+        return {
+          htmlFile: '/reports/synthetic.html',
+          csvFile: '/reports/synthetic.csv',
+          jsonFile: '/reports/synthetic.json',
+        };
+      },
+    });
+    const summary = await runPriceCheck(deps, { now: () => NOW });
+    expect(summary.candidatesFound).toBe(reason ? 0 : 1);
+    expect(summary.observationsRecorded).toBe(reason ? 0 : 1);
+    expect(sameDayPriceFetcher).toHaveBeenCalledTimes(reason ? 1 : 0);
+    expect(reports[0].rows[0]).toMatchObject({
+      purchase: { grossUnitCents: 2000, paidUnitCents: 1000 },
+      prices: {
+        warehouse: {
+          unitPriceCents: reason ? null : quotationCents,
+          unavailableReason: reason,
+          warehouseEvidence: { quotationCents, unitReason: reason },
+        },
+      },
+    });
+    if (!reason) {
+      expect(reports[0].rows[0].potentialSavingsCents).toBe(
+        1000 - quotationCents,
+      );
+      expect(
+        deps.database.latestPriceObservations()[0].warehouseEvidence
+          ?.comparisonBasis,
+      ).toBe('assumed_package');
+    }
     deps.database.close();
   },
 );
