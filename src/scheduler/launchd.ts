@@ -184,6 +184,12 @@ export async function installLaunchAgent(
   };
   let oldPlistPrevalidated = false;
   let preserveBackup = false;
+  const legacy = options.legacyAgent;
+  const legacyBackupPath = legacy
+    ? transactionPath(legacy.plistPath, 'backup')
+    : '';
+  const legacyPhases = { ...phases };
+  let preserveLegacyBackup = false;
 
   try {
     writeFileSync(candidatePath, renderLaunchAgent(options.renderOptions), {
@@ -211,12 +217,35 @@ export async function installLaunchAgent(
       verifyBackup(options.plistPath, backupPath);
       phases.backupCreated = true;
     }
-    if (options.legacyAgent !== undefined) {
-      await uninstallLaunchAgent({
-        ...options.legacyAgent,
-        uid: options.uid,
+    if (legacy !== undefined) {
+      validateInstallTarget(legacy.plistPath, options.uid);
+      if (!legacy.label.trim()) throw new TypeError('label must not be empty');
+      legacyPhases.oldExists = existsSync(legacy.plistPath);
+      legacyPhases.oldLoaded = await isAgentLoaded(
         execFile,
-      });
+        serviceTarget(options.uid, legacy.label),
+      );
+      if (legacyPhases.oldLoaded && !legacyPhases.oldExists)
+        throw new Error(
+          `Loaded legacy LaunchAgent plist is missing at ${legacy.plistPath}; refusing to unload it.`,
+        );
+      if (legacyPhases.oldExists) {
+        await execFile(PLUTIL, ['-lint', legacy.plistPath]);
+        operations.backup(legacy.plistPath, legacyBackupPath);
+        verifyBackup(legacy.plistPath, legacyBackupPath);
+        legacyPhases.backupCreated = true;
+      }
+      await allowUnavailableAgent(() =>
+        execFile(LAUNCHCTL, [
+          'bootout',
+          serviceTarget(options.uid, legacy.label),
+        ]),
+      );
+      legacyPhases.oldBootedOut = legacyPhases.oldLoaded;
+      if (legacyPhases.oldExists) {
+        operations.remove(legacy.plistPath);
+        legacyPhases.replacementApplied = true;
+      }
     }
     if (phases.oldLoaded) {
       await execFile(LAUNCHCTL, [
@@ -246,6 +275,33 @@ export async function installLaunchAgent(
       uid: options.uid,
     });
     preserveBackup = rollback.preserveBackup;
+    if (legacy !== undefined && legacyPhases.backupCreated) {
+      if (rollback.incomplete) {
+        // The replacement might still be running. Preserve legacy recovery state
+        // instead of reloading a second service during an incomplete rollback.
+        preserveLegacyBackup = true;
+      } else {
+        const legacyRollback = await rollbackInstallation({
+          backupPath: legacyBackupPath,
+          execFile,
+          label: legacy.label,
+          oldPlistPrevalidated: true,
+          operations,
+          phases: legacyPhases,
+          plistPath: legacy.plistPath,
+          uid: options.uid,
+        });
+        preserveLegacyBackup = legacyRollback.preserveBackup;
+        if (legacyRollback.incomplete || legacyRollback.restoreFailed)
+          throw new IncompleteLaunchAgentRollbackError(
+            [error, ...rollback.errors, ...legacyRollback.errors],
+            legacyRollback.recoveryPath,
+            legacyPhases,
+            legacyRollback.recoveryKind,
+          );
+        rollback.errors.push(...legacyRollback.errors);
+      }
+    }
     if (rollback.incomplete || rollback.restoreFailed) {
       throw new IncompleteLaunchAgentRollbackError(
         [error, ...rollback.errors],
@@ -264,6 +320,7 @@ export async function installLaunchAgent(
   } finally {
     operations.remove(candidatePath);
     if (!preserveBackup) operations.remove(backupPath);
+    if (legacy && !preserveLegacyBackup) operations.remove(legacyBackupPath);
   }
 }
 

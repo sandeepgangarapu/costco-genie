@@ -471,6 +471,7 @@ describe('createDefaultCliActions composition', () => {
     ]);
     expect(launchctlCommands).toEqual([
       'print gui/777/com.costco-genie.daily',
+      `print gui/777/${LEGACY_AGENT_LABEL}`,
       `bootout gui/777/${LEGACY_AGENT_LABEL}`,
       `bootstrap gui/777 ${plistPath}`,
       'bootout gui/777/com.costco-genie.daily',

@@ -257,6 +257,48 @@ describe('LaunchAgent installation', () => {
     expect(commands).toContain(`bootstrap gui/501 ${plistPath}`);
   });
 
+  it.each([false, true])(
+    'restores the legacy plist and its original loaded state after replacement bootstrap failure (loaded: %s)',
+    async (loaded) => {
+      const { configured, directory, plistPath } = installFixture();
+      const legacyPlist = join(
+        directory,
+        'LaunchAgents',
+        `${LEGACY_AGENT_LABEL}.plist`,
+      );
+      writeFileSync(legacyPlist, 'TEST-legacy plist');
+      const commands: string[] = [];
+      await expect(
+        installLaunchAgent({
+          plistPath,
+          renderOptions: configured,
+          uid: 501,
+          legacyAgent: { label: LEGACY_AGENT_LABEL, plistPath: legacyPlist },
+          execFile: async (file, args) => {
+            commands.push(args.join(' '));
+            if (
+              args[0] === 'print' &&
+              (!loaded || !args[1]?.endsWith(LEGACY_AGENT_LABEL))
+            )
+              throw commandError('Could not find service');
+            if (args[0] === 'bootstrap' && args[2] === plistPath)
+              throw commandError('TEST-bootstrap failed', 1);
+            return {
+              stderr: '',
+              stdout: file === configured.nodePath ? 'v22.13.0' : '',
+            };
+          },
+        }),
+      ).rejects.toThrow('TEST-bootstrap failed');
+      expect(readFileSync(legacyPlist, 'utf8')).toBe('TEST-legacy plist');
+      expect(commands.includes(`bootstrap gui/501 ${legacyPlist}`)).toBe(
+        loaded,
+      );
+      expect(existsSync(plistPath)).toBe(false);
+      expect(leftoverTransactionFiles(directory)).toEqual([]);
+    },
+  );
+
   it('refuses to boot out a loaded service whose old plist is missing', async () => {
     const { configured, directory, plistPath } = installFixture();
     const commands: string[] = [];
