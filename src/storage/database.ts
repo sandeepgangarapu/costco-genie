@@ -399,6 +399,15 @@ export class Database {
   }
 
   getLastSuccessfulRun(): RunSummary | null {
+    return this.lastScheduleCoverage(false);
+  }
+
+  /** A freshness skip consumes its receipt trigger just as a successful run does. */
+  getLastReceiptScheduleCoverage(): RunSummary | null {
+    return this.lastScheduleCoverage(true);
+  }
+
+  private lastScheduleCoverage(includeSkipped: boolean): RunSummary | null {
     const row = this.sqlite
       .prepare<[], RunRow>(
         `
@@ -409,7 +418,7 @@ export class Database {
                ${this.runDiagnosticSelection},
                ${this.runReportFilesSelection}
         FROM runs
-        WHERE outcome = 'success'
+        WHERE outcome = 'success' ${includeSkipped ? "OR outcome = 'skipped'" : ''}
         ORDER BY finished_at DESC, id DESC
         LIMIT 1
       `,

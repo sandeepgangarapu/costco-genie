@@ -75,6 +75,7 @@ type RunDatabase = Pick<
   | 'finishRun'
   | 'getChannelAlertState'
   | 'getLastSuccessfulRun'
+  | 'getLastReceiptScheduleCoverage'
   | 'recordPriceObservations'
   | 'recentPurchases'
   | 'saveChannelAlertState'
@@ -145,7 +146,7 @@ async function runLocked(
     options.scheduled === true &&
     (!receiptScheduleDue(
       dependencies.config,
-      dependencies.database.getLastSuccessfulRun(),
+      dependencies.database.getLastReceiptScheduleCoverage(),
       started,
     ) ||
       isFresh(

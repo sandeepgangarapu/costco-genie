@@ -2259,6 +2259,50 @@ describe('runPriceCheck', () => {
     deps.database.close();
   });
 
+  it('consumes a weekly trigger skipped for freshness instead of importing on a later daily watch trigger', async () => {
+    const readTokens = vi.fn(async () => ({
+      clientId: 'TEST',
+      idToken: 'TEST',
+    }));
+    const deps = dependencies({
+      config: { ...DEFAULT_CONFIG, scheduledWeekday: 5, scheduledHour: 16 },
+      readTokens,
+    });
+    const prior: RunSummary = {
+      startedAt: new Date(2026, 9, 23, 14, 59).toISOString(),
+      finishedAt: new Date(2026, 9, 23, 15).toISOString(),
+      outcome: 'success',
+      purchasesProcessed: 0,
+      observationsRecorded: 0,
+      candidatesFound: 0,
+      alertsSent: 0,
+      unresolvedPrices: 0,
+    };
+    deps.database.finishRun(deps.database.beginRun(prior.startedAt), prior);
+    for (const time of [
+      new Date(2026, 9, 23, 16),
+      new Date(2026, 9, 24, 8),
+      new Date(2026, 9, 25, 8),
+      new Date(2026, 9, 29, 17),
+    ]) {
+      expect(
+        (await runPriceCheck(deps, { scheduled: true, now: () => time }))
+          .outcome,
+      ).toBe('skipped');
+    }
+    expect(readTokens).not.toHaveBeenCalled();
+    expect(
+      (
+        await runPriceCheck(deps, {
+          scheduled: true,
+          now: () => new Date(2026, 9, 30, 16),
+        })
+      ).outcome,
+    ).toBe('success');
+    expect(readTokens).toHaveBeenCalledOnce();
+    deps.database.close();
+  });
+
   it('skips a three-day-interval scheduled run until the freshness window elapses', async () => {
     const config = { ...DEFAULT_CONFIG, scheduledIntervalDays: 3 };
     const prior = {
